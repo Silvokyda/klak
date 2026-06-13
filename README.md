@@ -9,6 +9,7 @@ Klak is a local-first Windows desktop assistant built with Tauri v2, React, Type
 - Node.js 20+
 - npm
 - Rust toolchain for Tauri desktop commands
+- Visual Studio 2022 Build Tools with Desktop development with C++, MSVC, and Windows SDK
 - Windows WebView2 runtime
 
 ## Setup
@@ -16,6 +17,11 @@ Klak is a local-first Windows desktop assistant built with Tauri v2, React, Type
 ```powershell
 npm install
 npm run dev
+```
+
+For the native desktop shell, run from a Visual Studio Developer PowerShell or initialize the Build Tools environment first:
+
+```powershell
 npm run tauri dev
 ```
 
@@ -32,9 +38,28 @@ npm run tauri build
 - During browser-only Vite development, repositories use `klak.insecure_dev_database.v1` in localStorage so UI work can continue without the Tauri runtime.
 - Database initialization is idempotent. `initDatabase()` creates tables and records migration version `1` in `schema_migrations`.
 - SQLite tables store memories, action logs, non-secret app settings, tool settings, and allowed folders.
-- API keys are stored through `secretStore`. The current implementation is an isolated dev fallback named `insecureDevSecretStore.ts`, and the UI warns: "Development storage is active. Do not use production keys."
+- API keys are stored through `secretStore`. In native Tauri, Klak uses Windows-backed storage through the Rust `keyring` crate. In browser-only development, Klak falls back to `insecureDevSecretStore.ts` and warns: "Development storage is active. Do not use production keys."
+- Implemented safe tools: `open_url`, `open_folder`, `create_note`, `copy_to_clipboard`, `search_memory`, and `create_memory`. They all go through permission checks, action previews, approval/denial, and audit logging.
 - Dangerous tools are registered as disabled future extension points and blocked by the permission system.
-- No telemetry, analytics, accounts, hosted backend, cloud sync, screenshot capture, or clipboard reading is implemented.
+- Voice input is opt-in and push-to-talk only. Klak does not listen in the background and does not upload audio.
+- No telemetry, analytics, accounts, hosted backend, cloud sync, screenshot capture, browser automation, terminal execution, or unrestricted clipboard/file reading is implemented.
+
+## Local Whisper CLI
+
+Local Whisper transcription is a foundation feature. Configure these in Settings when you have your own local Whisper executable and model:
+
+- Local Whisper executable path
+- Local Whisper model path
+
+Klak does not download models automatically. In this build, local recording UI and provider configuration are present, but native Whisper execution is intentionally not enabled yet.
+
+## Native Verification Notes
+
+- `npm run build` verifies TypeScript and the production web bundle.
+- `cargo check` passes when run through the Visual Studio Build Tools environment.
+- `npm run tauri dev` launches the native app when port `1420` is free.
+- If Windows Smart App Control blocks generated binaries, allow or rebuild according to your local Windows policy.
+- `src-tauri/icons/icon.ico` is required for Windows packaging.
 
 ## Public Repo Hygiene
 

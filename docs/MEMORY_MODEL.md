@@ -43,3 +43,5 @@ The repository functions are:
 - `touchMemory(id)`
 
 API keys and other secrets must never be stored as memories.
+
+The safe `create_memory` tool is intended for user-approved facts, preferences, project notes, workflows, tasks, documents, and command history. If content appears to contain credentials, tokens, API keys, or passwords, it should be refused or redirected to secret storage rather than memory.

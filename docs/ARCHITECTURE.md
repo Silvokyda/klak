@@ -12,7 +12,7 @@ The current MVP keeps most application behavior in TypeScript while the Tauri sh
 
 ## Local-First Design
 
-Klak has no hosted backend, account system, telemetry, analytics, or cloud sync. Settings, memories, tool state, action logs, allowed folders, and development API key storage stay on the local machine.
+Klak has no hosted backend, account system, telemetry, analytics, or cloud sync. Settings, memories, tool state, action logs, allowed folders, voice settings, and secrets stay on the local machine.
 
 SQLite is the durable local database in the Tauri runtime. `initDatabase()` in `src/lib/db/database.ts` opens `sqlite:klak.db`, creates `schema_migrations`, and applies the idempotent schema in `src/lib/db/schema.ts`.
 
@@ -60,9 +60,34 @@ Tools are declared in `src/lib/tools/toolRegistry.ts`. Safe MVP tools are enable
 
 Tool execution must pass through the permission policy, action preview, user approval or denial, and audit log update path.
 
+Implemented safe tools:
+
+- `open_url`: validates and opens only `http` and `https` URLs.
+- `open_folder`: opens only folders in `allowed_folders`.
+- `create_note`: writes Markdown notes only inside allowed folders and refuses overwrites.
+- `copy_to_clipboard`: writes clipboard text only after approval and never reads clipboard automatically.
+- `search_memory`: searches local memory and logs the query summary.
+- `create_memory`: creates memory only through explicit request or approved preview.
+
 ## Secrets
 
-Secrets are not stored in `app_settings`, memories, or logs. The API key path goes through `src/lib/security/secretStore.ts`. The current implementation delegates to `insecureDevSecretStore.ts`, which is clearly named and warned about in setup/settings. Replace this with OS keychain storage before production use.
+Secrets are not stored in `app_settings`, memories, or logs. The API key path goes through `src/lib/security/secretStore.ts`.
+
+In Tauri, secret operations call native commands backed by the Rust `keyring` crate, which uses Windows credential storage. Browser-only development delegates to `insecureDevSecretStore.ts`, which is clearly named and warned about in setup/settings.
+
+## Voice Foundation
+
+Voice settings live in `app_settings`. The Assistant screen exposes push-to-talk recording only when voice is enabled. Audio recording is visible, starts only after the user presses the voice button, stays local, and is discarded after transcription attempt.
+
+The transcription abstraction is:
+
+```ts
+interface VoiceTranscriptionProvider {
+  transcribe(input: VoiceTranscriptionInput): Promise<VoiceTranscriptionResult>;
+}
+```
+
+Initial providers are `disabled` and `local_whisper_cli`. Local Whisper requires user-provided executable and model paths. Native Whisper execution is not enabled in this build.
 
 ## Future Cloud Agent
 

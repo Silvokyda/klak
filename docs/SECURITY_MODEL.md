@@ -56,6 +56,31 @@ Non-secret settings are stored in the local SQLite `app_settings` table. Tool en
 
 API keys are handled by `src/lib/security/secretStore.ts`, not SQLite settings or memories. The current implementation uses `insecureDevSecretStore.ts` and displays: "Development storage is active. Do not use production keys." Replace this with OS keychain storage before production use.
 
+In the native Tauri app, `secretStore` calls Rust commands backed by the `keyring` crate and Windows credential storage. Browser-only development still uses `insecureDevSecretStore.ts`.
+
+## Safe Local Tools
+
+- `open_url` allows only `http` and `https`.
+- `open_folder` allows only folders already present in `allowed_folders`.
+- `create_note` writes only inside allowed folders and refuses to overwrite existing files.
+- `copy_to_clipboard` writes text only after user approval and never reads clipboard automatically.
+- `search_memory` searches local memory and should avoid logging raw sensitive queries.
+- `create_memory` must not save secrets as memories.
+
+All tool calls pass through preview, approval or denial, and audit logging.
+
+## Voice Rules
+
+- Microphone use is opt-in.
+- Recording starts only when the user presses the voice button.
+- Recording state is visible.
+- Canceling recording discards audio.
+- No wake-word listening.
+- No background microphone capture.
+- No cloud speech services by default.
+- Transcription does not auto-send chat messages.
+- Spoken output is off by default and guarded against obvious secret-like text.
+
 ## Not Implemented
 
-Klak still does not implement browser automation, mouse or keyboard control, screenshot capture, clipboard reading, cloud sync, account login, telemetry, or unrestricted file reading.
+Klak still does not implement browser automation, mouse or keyboard control, screenshot capture, clipboard reading, cloud sync, account login, telemetry, unrestricted file reading, terminal execution, or native Whisper execution.

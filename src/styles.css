@@ -225,8 +225,9 @@ textarea {
 
 .composer {
   display: grid;
-  grid-template-columns: 1fr auto;
+  grid-template-columns: 1fr auto auto;
   gap: 10px;
+  align-items: start;
 }
 
 .primary {
@@ -387,6 +388,59 @@ textarea {
   padding: 10px;
 }
 
+.status-badge {
+  border: 1px solid #b7dbc5;
+  background: #e5f4eb;
+  color: #256745;
+  border-radius: 999px;
+  padding: 7px 10px;
+  font-size: 13px;
+}
+
+.settings-banner, .section-divider {
+  border: 1px solid #dde3ea;
+  border-radius: 8px;
+  padding: 12px;
+  display: grid;
+  gap: 4px;
+  background: #f8fafb;
+}
+
+.section-divider h3, .section-divider p {
+  margin: 0;
+}
+
+.voice-control {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.voice-control span {
+  max-width: 320px;
+  color: #5f6f80;
+  font-size: 13px;
+}
+
+.recording-dot {
+  width: 10px;
+  height: 10px;
+  border-radius: 999px;
+  background: #aeb8c2;
+}
+
+.recording-dot.active {
+  background: #c43232;
+  box-shadow: 0 0 0 5px rgba(196, 50, 50, 0.14);
+}
+
+.icon-action {
+  margin-top: 8px;
+  padding: 5px 8px;
+  font-size: 12px;
+}
+
 @media (max-width: 860px) {
   .shell {
     grid-template-columns: 1fr;
@@ -401,6 +455,10 @@ textarea {
   }
 
   .table-head, .table-row {
+    grid-template-columns: 1fr;
+  }
+
+  .composer {
     grid-template-columns: 1fr;
   }
 }

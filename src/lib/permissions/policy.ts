@@ -1,6 +1,7 @@
 import type { ActionPreview, AppSettings, PermissionMode, RiskLevel, ToolDefinition } from "../../types";
 import { logAction, updateActionLog } from "../logs/actionLogRepository";
 import { nowIso, summarizeInput } from "../utils";
+import { looksSensitive, safeClipboardPreview } from "../tools/safeToolUtils";
 
 export function requireConfirmation(mode: PermissionMode, riskLevel: RiskLevel): boolean {
   if (riskLevel === "dangerous" || riskLevel === "high" || riskLevel === "medium") return true;
@@ -20,7 +21,10 @@ export async function createActionPreview(
   input: Record<string, unknown>,
   settings: AppSettings
 ): Promise<ActionPreview> {
-  const inputSummary = summarizeInput(input);
+  const inputSummary =
+    tool.name === "search_memory" && looksSensitive(String(input.query ?? ""))
+      ? "query: [redacted sensitive-looking query]"
+      : summarizeInput(input);
   const actionLog = await logAction({
     tool_name: tool.name,
     input_summary: inputSummary,
@@ -61,7 +65,8 @@ function describeAction(toolName: string, input: Record<string, unknown>): strin
   if (toolName === "open_url") return `I plan to open ${String(input.url ?? "the requested URL")} in your browser.`;
   if (toolName === "open_folder") return `I plan to open the allowed folder ${String(input.path ?? "")}.`;
   if (toolName === "create_memory") return `I plan to save a local memory titled "${String(input.title ?? "Untitled")}".`;
-  if (toolName === "create_note") return `I plan to create a Markdown note named ${String(input.fileName ?? "note.md")}.`;
-  if (toolName === "copy_to_clipboard") return "I plan to copy the previewed text to your clipboard.";
+  if (toolName === "search_memory") return `I plan to search local memory for "${String(input.query ?? "")}".`;
+  if (toolName === "create_note") return `I plan to create "${String(input.title ?? input.fileName ?? "note")}" at ${String(input.path ?? "")}.`;
+  if (toolName === "copy_to_clipboard") return `I plan to copy this text to your clipboard:\n${safeClipboardPreview(String(input.text ?? ""))}`;
   return `I plan to use ${toolName}.`;
 }

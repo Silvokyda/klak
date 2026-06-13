@@ -62,6 +62,13 @@ export interface AppSettings {
   clipboardReadEnabled: boolean;
   localContextEnabled: boolean;
   allToolsDisabled: boolean;
+  voiceEnabled: boolean;
+  pushToTalkEnabled: boolean;
+  voiceInputProvider: "disabled" | "local_whisper_cli";
+  voiceOutputProvider: "disabled" | "web_speech";
+  localWhisperExecutablePath: string;
+  localWhisperModelPath: string;
+  microphonePermissionStatus: "unknown" | "granted" | "denied" | "prompt";
 }
 
 export interface AllowedFolder {
@@ -122,6 +129,20 @@ export interface ActionPreview {
   riskLevel: RiskLevel;
   canRun: boolean;
   requiresConfirmation: boolean;
+}
+
+export interface VoiceTranscriptionInput {
+  audio: Blob;
+  settings: AppSettings;
+}
+
+export interface VoiceTranscriptionResult {
+  text: string;
+  error?: string;
+}
+
+export interface VoiceTranscriptionProvider {
+  transcribe(input: VoiceTranscriptionInput): Promise<VoiceTranscriptionResult>;
 }
 
 export interface ChatMessage {

@@ -1,12 +1,13 @@
-import { Send, Search } from "lucide-react";
+import { Send, Search, Volume2 } from "lucide-react";
 import { useState } from "react";
 import { ActionPreviewCard } from "../../components/ActionPreviewCard";
 import { ScreenHeader } from "../../components/ScreenHeader";
 import type { ActionPreview, AppSettings, ChatMessage } from "../../types";
 import { sendChatMessage } from "../../lib/ai/chatOrchestrator";
-import { createActionPreview } from "../../lib/permissions/policy";
-import { listTools } from "../../lib/tools/toolRegistry";
 import { id, nowIso } from "../../lib/utils";
+import { buildActionPreviewForSuggestion } from "../../lib/tools/toolProposals";
+import { VoiceRecorder } from "../../components/VoiceRecorder";
+import { speakText } from "../../lib/voice/transcription";
 
 export function AssistantScreen({ settings }: { settings: AppSettings }) {
   const [messages, setMessages] = useState<ChatMessage[]>([
@@ -15,6 +16,7 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
   const [input, setInput] = useState("");
   const [preview, setPreview] = useState<ActionPreview | null>(null);
   const [busy, setBusy] = useState(false);
+  const [voiceMessage, setVoiceMessage] = useState<string | null>(null);
 
   async function submit() {
     if (!input.trim() || busy) return;
@@ -25,9 +27,8 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
     const response = await sendChatMessage(userMessage.content, settings);
     setMessages((items) => [...items, { id: id("msg"), role: "assistant", content: response.message, createdAt: nowIso() }]);
     if (response.suggestedAction) {
-      const tools = await listTools(settings.allToolsDisabled);
-      const tool = tools.find((item) => item.name === response.suggestedAction?.toolName);
-      if (tool) setPreview(await createActionPreview(tool, response.suggestedAction.input, settings));
+      const nextPreview = await buildActionPreviewForSuggestion(response.suggestedAction, settings);
+      if (nextPreview) setPreview(nextPreview);
     }
     setBusy(false);
   }
@@ -44,6 +45,16 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
           {messages.map((message) => (
             <article key={message.id} className={`message ${message.role}`}>
               <p>{message.content}</p>
+              {message.role === "assistant" && (
+                <button
+                  className="icon-action"
+                  title="Speak response"
+                  onClick={() => setVoiceMessage(speakText(message.content, settings))}
+                >
+                  <Volume2 size={14} />
+                  Speak
+                </button>
+              )}
             </article>
           ))}
         </section>
@@ -54,11 +65,13 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
       </div>
       <form className="composer" onSubmit={(event) => { event.preventDefault(); void submit(); }}>
         <input value={input} onChange={(event) => setInput(event.target.value)} placeholder="Ask Klak, or say 'remember this...'" />
+        <VoiceRecorder settings={settings} onTranscript={(text) => setInput(text)} />
         <button className="primary" disabled={busy}>
           <Send size={16} />
           Send
         </button>
       </form>
+      {voiceMessage && <p className="warning">{voiceMessage}</p>}
     </div>
   );
 }

@@ -1,3 +1,3 @@
 fn main() {
-  klak_lib::run()
+    klak_lib::run()
 }

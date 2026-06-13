@@ -7,6 +7,8 @@
 - Memory
 - AI chat
 - Safe tools
+- Windows-backed secret storage
+- Push-to-talk voice foundation
 
 ## Phase 0.2
 
@@ -14,6 +16,8 @@
 - Workflow memory
 - Improved memory search
 - App launcher
+- Native local Whisper CLI transcription execution
+- Better tool proposal parsing
 
 ## Phase 0.3
 

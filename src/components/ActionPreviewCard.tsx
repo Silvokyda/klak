@@ -1,4 +1,5 @@
 import { Check, X } from "lucide-react";
+import { useState } from "react";
 import type { ActionPreview, AppSettings } from "../types";
 import { approveAction, denyAction } from "../lib/permissions/policy";
 import { executeApprovedTool } from "../lib/tools/toolExecutor";
@@ -10,10 +11,20 @@ interface Props {
 }
 
 export function ActionPreviewCard({ preview, settings, onDone }: Props) {
+  const [error, setError] = useState<string | null>(null);
+  const [running, setRunning] = useState(false);
+
   async function approve() {
-    await approveAction(preview.id);
-    await executeApprovedTool(preview, settings);
-    onDone();
+    setError(null);
+    setRunning(true);
+    try {
+      await approveAction(preview.id);
+      await executeApprovedTool(preview, settings);
+      onDone();
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : String(caught));
+      setRunning(false);
+    }
   }
 
   async function deny() {
@@ -30,16 +41,18 @@ export function ActionPreviewCard({ preview, settings, onDone }: Props) {
         <p>Data: {preview.inputSummary || "No input data"}</p>
       </div>
       <div className="row">
-        <button className="primary" disabled={!preview.canRun} onClick={approve} title="Approve action">
+        <button className="primary" disabled={!preview.canRun || running} onClick={approve} title="Approve action">
           <Check size={16} />
-          Approve
+          {running ? "Running" : "Approve"}
         </button>
-        <button onClick={deny} title="Deny action">
+        <button onClick={deny} disabled={running} title="Deny action">
           <X size={16} />
           Deny
         </button>
+        {running && <button onClick={() => setRunning(false)} title="Stop current UI action">Stop</button>}
       </div>
       {!preview.canRun && <p className="warning">This action is blocked by the current mode or MVP safety policy.</p>}
+      {error && <p className="warning">{error}</p>}
     </section>
   );
 }

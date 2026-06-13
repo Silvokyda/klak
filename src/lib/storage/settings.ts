@@ -15,7 +15,14 @@ export type SettingKey =
   | "screenshot_enabled"
   | "local_context_enabled"
   | "all_tools_disabled"
-  | "current_theme";
+  | "current_theme"
+  | "voice_enabled"
+  | "push_to_talk_enabled"
+  | "voice_input_provider"
+  | "voice_output_provider"
+  | "local_whisper_executable_path"
+  | "local_whisper_model_path"
+  | "microphone_permission_status";
 
 export const defaultSettings: AppSettings = {
   setupComplete: false,
@@ -27,7 +34,14 @@ export const defaultSettings: AppSettings = {
   allowedFolders: [],
   clipboardReadEnabled: false,
   localContextEnabled: false,
-  allToolsDisabled: false
+  allToolsDisabled: false,
+  voiceEnabled: false,
+  pushToTalkEnabled: true,
+  voiceInputProvider: "disabled",
+  voiceOutputProvider: "disabled",
+  localWhisperExecutablePath: "",
+  localWhisperModelPath: "",
+  microphonePermissionStatus: "unknown"
 };
 
 export async function getSetting(key: SettingKey): Promise<string | null> {
@@ -74,7 +88,16 @@ export async function loadSettings(): Promise<AppSettings> {
     allowedFolders: folders.map((folder) => folder.path),
     clipboardReadEnabled: rows.clipboard_reading_enabled === "true",
     localContextEnabled: rows.local_context_enabled === "true",
-    allToolsDisabled: rows.all_tools_disabled === "true"
+    allToolsDisabled: rows.all_tools_disabled === "true",
+    voiceEnabled: rows.voice_enabled === "true",
+    pushToTalkEnabled: rows.push_to_talk_enabled !== "false",
+    voiceInputProvider: (rows.voice_input_provider as AppSettings["voiceInputProvider"]) || defaultSettings.voiceInputProvider,
+    voiceOutputProvider: (rows.voice_output_provider as AppSettings["voiceOutputProvider"]) || defaultSettings.voiceOutputProvider,
+    localWhisperExecutablePath: rows.local_whisper_executable_path || "",
+    localWhisperModelPath: rows.local_whisper_model_path || "",
+    microphonePermissionStatus:
+      (rows.microphone_permission_status as AppSettings["microphonePermissionStatus"]) ||
+      defaultSettings.microphonePermissionStatus
   };
 }
 
@@ -88,6 +111,13 @@ export async function saveSettings(settings: AppSettings): Promise<void> {
     setSetting("clipboard_reading_enabled", String(settings.clipboardReadEnabled)),
     setSetting("local_context_enabled", String(settings.localContextEnabled)),
     setSetting("all_tools_disabled", String(settings.allToolsDisabled)),
+    setSetting("voice_enabled", String(settings.voiceEnabled)),
+    setSetting("push_to_talk_enabled", String(settings.pushToTalkEnabled)),
+    setSetting("voice_input_provider", settings.voiceInputProvider),
+    setSetting("voice_output_provider", settings.voiceOutputProvider),
+    setSetting("local_whisper_executable_path", settings.localWhisperExecutablePath),
+    setSetting("local_whisper_model_path", settings.localWhisperModelPath),
+    setSetting("microphone_permission_status", settings.microphonePermissionStatus),
     setSetting("cloud_enabled", "false"),
     setSetting("screenshot_enabled", "false")
   ]);
