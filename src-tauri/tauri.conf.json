@@ -29,5 +29,10 @@
     "active": true,
     "targets": "all",
     "icon": []
+  },
+  "plugins": {
+    "sql": {
+      "preload": ["sqlite:klak.db"]
+    }
   }
 }
