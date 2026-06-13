@@ -1,16 +1,18 @@
-import { RotateCcw, Save } from "lucide-react";
+import { RotateCcw, Save, Stethoscope } from "lucide-react";
 import { useState } from "react";
 import { ScreenHeader } from "../../components/ScreenHeader";
 import type { AppSettings, PermissionMode } from "../../types";
 import { apiKeyVault } from "../../lib/security/apiKeyVault";
 import { clearLocalData } from "../../lib/storage/settings";
 import { getSecretStorageStatus } from "../../lib/security/secretStore";
+import { testWhisperSetup } from "../../lib/voice/transcription";
 
 const modes: PermissionMode[] = ["observe_only", "suggest_only", "draft_fill_only", "act_with_confirmation", "trusted_workflows_only"];
 
 export function SettingsScreen({ settings, onSettingsChange }: { settings: AppSettings; onSettingsChange: (settings: AppSettings) => void }) {
   const [draft, setDraft] = useState(settings);
   const [apiKey, setApiKey] = useState("");
+  const [whisperStatus, setWhisperStatus] = useState<string | null>(null);
 
   async function save() {
     if (apiKey.trim()) await apiKeyVault.saveApiKey(apiKey.trim());
@@ -76,7 +78,7 @@ export function SettingsScreen({ settings, onSettingsChange }: { settings: AppSe
         </label>
         <div className="section-divider">
           <h3>Voice</h3>
-          <p>No wake-word listening. Recording starts only when you press the voice button.</p>
+          <p>Klak uses local transcription only. Audio is not uploaded. No wake-word listening.</p>
         </div>
         <label className="toggle">
           <input type="checkbox" checked={draft.voiceEnabled} onChange={(event) => setDraft({ ...draft, voiceEnabled: event.target.checked })} />
@@ -122,7 +124,43 @@ export function SettingsScreen({ settings, onSettingsChange }: { settings: AppSe
             placeholder="C:\\Models\\ggml-base.en.bin"
           />
         </label>
-        <p className="warning">Voice output is off by default. Audio is not uploaded by Klak, and transcription does not auto-send messages.</p>
+        <label>
+          Local Whisper language
+          <input
+            value={draft.localWhisperLanguage}
+            onChange={(event) => setDraft({ ...draft, localWhisperLanguage: event.target.value || "auto" })}
+            placeholder="auto"
+          />
+        </label>
+        <label>
+          Local Whisper threads
+          <input
+            type="number"
+            min={1}
+            max={16}
+            value={draft.localWhisperThreads}
+            onChange={(event) => setDraft({ ...draft, localWhisperThreads: Number(event.target.value) || 4 })}
+          />
+        </label>
+        <label className="toggle">
+          <input
+            type="checkbox"
+            checked={draft.keepTempAudioForDebugging}
+            onChange={(event) => setDraft({ ...draft, keepTempAudioForDebugging: event.target.checked })}
+          />
+          Keep temporary audio for debugging
+        </label>
+        <div className="row">
+          <button type="button" onClick={() => testWhisperSetup(draft).then(setWhisperStatus)}>
+            <Stethoscope size={16} />
+            Test Whisper setup
+          </button>
+          {whisperStatus && <span className="inline-status">{whisperStatus}</span>}
+        </div>
+        <p className="warning">
+          Voice output is off by default. Transcription does not auto-send messages. Temporary audio is deleted after transcription unless debug
+          retention is enabled.
+        </p>
       </section>
       <div className="row">
         <button className="primary" onClick={save}><Save size={16} /> Save settings</button>

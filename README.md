@@ -46,18 +46,30 @@ npm run tauri build
 
 ## Local Whisper CLI
 
-Local Whisper transcription is a foundation feature. Configure these in Settings when you have your own local Whisper executable and model:
+Local Whisper transcription is supported in the native Tauri app. Configure these in Settings when you have your own local Whisper executable and model:
 
 - Local Whisper executable path
 - Local Whisper model path
+- Local Whisper language, default `auto`
+- Local Whisper threads, default `4`
 
-Klak does not download models automatically. In this build, local recording UI and provider configuration are present, but native Whisper execution is intentionally not enabled yet.
+Accepted executable names include `whisper-cli.exe`, `main.exe`, `whisper.cpp.exe`, and `faster-whisper.exe`. Unusual executable names are allowed only when explicitly configured, and Klak shows a warning. Klak does not download models automatically and does not accept custom shell arguments.
+
+Audio flow:
+
+- recording starts only when you press the voice button,
+- temporary audio is written under the system temp directory,
+- the configured Whisper executable is called with controlled arguments,
+- transcript text is inserted into the chat input for review,
+- the message is not sent automatically,
+- temporary audio and transcript files are deleted unless `Keep temporary audio for debugging` is enabled.
 
 ## Native Verification Notes
 
 - `npm run build` verifies TypeScript and the production web bundle.
 - `cargo check` passes when run through the Visual Studio Build Tools environment.
 - `npm run tauri dev` launches the native app when port `1420` is free.
+- Native SQLite was verified at `C:\Users\silvance\AppData\Roaming\local.klak.operator\klak.db`.
 - If Windows Smart App Control blocks generated binaries, allow or rebuild according to your local Windows policy.
 - `src-tauri/icons/icon.ico` is required for Windows packaging.
 

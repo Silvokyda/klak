@@ -78,9 +78,13 @@ All tool calls pass through preview, approval or denial, and audit logging.
 - No wake-word listening.
 - No background microphone capture.
 - No cloud speech services by default.
+- Local Whisper execution validates configured executable and model paths.
+- Local Whisper is launched through `std::process::Command`, not through shell interpolation.
+- Custom user shell arguments are not accepted.
+- Temporary audio is deleted after transcription unless debugging retention is enabled.
 - Transcription does not auto-send chat messages.
 - Spoken output is off by default and guarded against obvious secret-like text.
 
 ## Not Implemented
 
-Klak still does not implement browser automation, mouse or keyboard control, screenshot capture, clipboard reading, cloud sync, account login, telemetry, unrestricted file reading, terminal execution, or native Whisper execution.
+Klak still does not implement browser automation, mouse or keyboard control, screenshot capture, clipboard reading, cloud sync, account login, telemetry, unrestricted file reading, terminal execution, wake-word listening, or always-on microphone capture.

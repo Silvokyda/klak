@@ -2,6 +2,7 @@ import { Mic, Square, X } from "lucide-react";
 import { useRef, useState } from "react";
 import type { AppSettings } from "../types";
 import { getTranscriptionProvider } from "../lib/voice/transcription";
+import { createActionLog } from "../lib/logs/actionLogRepository";
 
 interface Props {
   settings: AppSettings;
@@ -21,23 +22,42 @@ export function VoiceRecorder({ settings, onTranscript }: Props) {
       setMessage("Voice input is disabled in Settings.");
       return;
     }
+    if (settings.voiceInputProvider === "disabled") {
+      setMessage("Choose a voice input provider in Settings first.");
+      return;
+    }
+    if (settings.voiceInputProvider === "local_whisper_cli" && (!settings.localWhisperExecutablePath || !settings.localWhisperModelPath)) {
+      setMessage("Configure local Whisper first.");
+      return;
+    }
     if (!navigator.mediaDevices?.getUserMedia) {
       setMessage("Microphone recording is not available in this WebView.");
       return;
     }
-    const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-    streamRef.current = stream;
-    chunksRef.current = [];
-    const recorder = new MediaRecorder(stream);
-    recorderRef.current = recorder;
-    recorder.ondataavailable = (event) => {
-      if (event.data.size > 0) chunksRef.current.push(event.data);
-    };
-    recorder.onstop = () => {
-      stream.getTracks().forEach((track) => track.stop());
-    };
-    recorder.start();
-    setRecording(true);
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      streamRef.current = stream;
+      chunksRef.current = [];
+      const recorder = new MediaRecorder(stream);
+      recorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) chunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop());
+      };
+      recorder.start();
+      setRecording(true);
+      await createActionLog({
+        tool_name: "voice_recording_started",
+        input_summary: "push-to-talk recording started",
+        risk_level: "medium",
+        status: "completed",
+        user_approved: true
+      });
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    }
   }
 
   async function stop() {
@@ -51,9 +71,35 @@ export function VoiceRecorder({ settings, onTranscript }: Props) {
     setRecording(false);
     const audio = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
     chunksRef.current = [];
+    await createActionLog({
+      tool_name: "voice_transcription_requested",
+      input_summary: `audio bytes: ${audio.size}, provider: ${settings.voiceInputProvider}`,
+      risk_level: "medium",
+      status: "completed",
+      user_approved: true
+    });
     const result = await getTranscriptionProvider(settings).transcribe({ audio, settings });
-    if (result.text) onTranscript(result.text);
-    setMessage(result.error ?? "Transcription inserted into the chat input.");
+    if (result.text) {
+      onTranscript(result.text);
+      await createActionLog({
+        tool_name: "voice_transcription_completed",
+        input_summary: `transcript chars: ${result.text.length}, duration ms: ${result.durationMs ?? "unknown"}`,
+        risk_level: "medium",
+        status: "completed",
+        user_approved: true
+      });
+      setMessage(result.warning ?? "Transcription inserted into the chat input.");
+    } else {
+      await createActionLog({
+        tool_name: "voice_transcription_failed",
+        input_summary: `provider: ${settings.voiceInputProvider}`,
+        risk_level: "medium",
+        status: "failed",
+        user_approved: true,
+        error_message: result.error ?? "Transcription failed."
+      });
+      setMessage(result.error ?? "Transcription failed.");
+    }
   }
 
   function cancel() {
@@ -61,13 +107,32 @@ export function VoiceRecorder({ settings, onTranscript }: Props) {
     streamRef.current?.getTracks().forEach((track) => track.stop());
     chunksRef.current = [];
     setRecording(false);
+    void createActionLog({
+      tool_name: "voice_recording_cancelled",
+      input_summary: "push-to-talk recording cancelled",
+      risk_level: "medium",
+      status: "completed",
+      user_approved: true
+    });
     setMessage("Recording canceled. No audio was saved.");
   }
+
+  if (!settings.voiceEnabled) {
+    return <div className="voice-control muted">Voice is off in Settings.</div>;
+  }
+
+  const needsWhisperSetup =
+    settings.voiceInputProvider === "local_whisper_cli" && (!settings.localWhisperExecutablePath || !settings.localWhisperModelPath);
 
   return (
     <div className="voice-control">
       <div className={recording ? "recording-dot active" : "recording-dot"} />
-      <button type="button" onClick={recording ? stop : start} title={recording ? "Stop recording" : "Start push-to-talk recording"}>
+      <button
+        type="button"
+        onClick={recording ? stop : start}
+        disabled={needsWhisperSetup}
+        title={needsWhisperSetup ? "Configure local Whisper first." : recording ? "Stop recording" : "Start push-to-talk recording"}
+      >
         {recording ? <Square size={16} /> : <Mic size={16} />}
         {recording ? "Stop" : "Voice"}
       </button>
@@ -77,6 +142,7 @@ export function VoiceRecorder({ settings, onTranscript }: Props) {
           Cancel
         </button>
       )}
+      {needsWhisperSetup && <span>Configure local Whisper first.</span>}
       {message && <span>{message}</span>}
     </div>
   );

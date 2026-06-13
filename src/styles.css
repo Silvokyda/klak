@@ -423,6 +423,17 @@ textarea {
   font-size: 13px;
 }
 
+.voice-control.muted {
+  color: #6d7d8b;
+  font-size: 13px;
+  padding: 9px 0;
+}
+
+.inline-status {
+  color: #4e5d6c;
+  font-size: 13px;
+}
+
 .recording-dot {
   width: 10px;
   height: 10px;

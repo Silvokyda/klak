@@ -68,6 +68,9 @@ export interface AppSettings {
   voiceOutputProvider: "disabled" | "web_speech";
   localWhisperExecutablePath: string;
   localWhisperModelPath: string;
+  localWhisperLanguage: string;
+  localWhisperThreads: number;
+  keepTempAudioForDebugging: boolean;
   microphonePermissionStatus: "unknown" | "granted" | "denied" | "prompt";
 }
 
@@ -139,6 +142,8 @@ export interface VoiceTranscriptionInput {
 export interface VoiceTranscriptionResult {
   text: string;
   error?: string;
+  warning?: string;
+  durationMs?: number;
 }
 
 export interface VoiceTranscriptionProvider {

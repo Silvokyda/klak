@@ -22,6 +22,9 @@ export type SettingKey =
   | "voice_output_provider"
   | "local_whisper_executable_path"
   | "local_whisper_model_path"
+  | "local_whisper_language"
+  | "local_whisper_threads"
+  | "keep_temp_audio_for_debugging"
   | "microphone_permission_status";
 
 export const defaultSettings: AppSettings = {
@@ -41,6 +44,9 @@ export const defaultSettings: AppSettings = {
   voiceOutputProvider: "disabled",
   localWhisperExecutablePath: "",
   localWhisperModelPath: "",
+  localWhisperLanguage: "auto",
+  localWhisperThreads: 4,
+  keepTempAudioForDebugging: false,
   microphonePermissionStatus: "unknown"
 };
 
@@ -95,6 +101,9 @@ export async function loadSettings(): Promise<AppSettings> {
     voiceOutputProvider: (rows.voice_output_provider as AppSettings["voiceOutputProvider"]) || defaultSettings.voiceOutputProvider,
     localWhisperExecutablePath: rows.local_whisper_executable_path || "",
     localWhisperModelPath: rows.local_whisper_model_path || "",
+    localWhisperLanguage: rows.local_whisper_language || defaultSettings.localWhisperLanguage,
+    localWhisperThreads: Number(rows.local_whisper_threads || defaultSettings.localWhisperThreads),
+    keepTempAudioForDebugging: rows.keep_temp_audio_for_debugging === "true",
     microphonePermissionStatus:
       (rows.microphone_permission_status as AppSettings["microphonePermissionStatus"]) ||
       defaultSettings.microphonePermissionStatus
@@ -117,6 +126,9 @@ export async function saveSettings(settings: AppSettings): Promise<void> {
     setSetting("voice_output_provider", settings.voiceOutputProvider),
     setSetting("local_whisper_executable_path", settings.localWhisperExecutablePath),
     setSetting("local_whisper_model_path", settings.localWhisperModelPath),
+    setSetting("local_whisper_language", settings.localWhisperLanguage),
+    setSetting("local_whisper_threads", String(settings.localWhisperThreads)),
+    setSetting("keep_temp_audio_for_debugging", String(settings.keepTempAudioForDebugging)),
     setSetting("microphone_permission_status", settings.microphonePermissionStatus),
     setSetting("cloud_enabled", "false"),
     setSetting("screenshot_enabled", "false")

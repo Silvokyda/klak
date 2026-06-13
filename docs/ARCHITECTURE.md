@@ -87,7 +87,11 @@ interface VoiceTranscriptionProvider {
 }
 ```
 
-Initial providers are `disabled` and `local_whisper_cli`. Local Whisper requires user-provided executable and model paths. Native Whisper execution is not enabled in this build.
+Initial providers are `disabled` and `local_whisper_cli`. Local Whisper requires user-provided executable and model paths.
+
+For native transcription, the frontend records audio with `MediaRecorder`, writes the blob to a temp file through `save_temp_voice_audio`, then calls `transcribe_audio_with_whisper`. The Rust command validates the executable and model paths, avoids shell interpolation, uses a fixed argument list, enforces a timeout, reads stdout or a `.txt` transcript file, and deletes temp files unless debug retention is enabled.
+
+Voice action logs record events such as recording started, cancelled, transcription requested, completed, and failed. Logs store metadata only, not raw audio and not transcript text.
 
 ## Future Cloud Agent
 
