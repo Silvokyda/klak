@@ -1,0 +1,55 @@
+# Dependencies
+node_modules/
+
+# Build output
+dist/
+build/
+out/
+coverage/
+src-tauri/target/
+src-tauri/gen/schemas/
+
+# Local databases and app data
+*.db
+*.db-*
+*.sqlite
+*.sqlite3
+*.sqlite-*
+klak.db
+
+# Secrets and local environment
+.env
+.env.*
+!.env.example
+*.pem
+*.key
+*.p12
+*.pfx
+*.crt
+*.cer
+
+# Logs and diagnostics
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+debug.log
+
+# Editor and OS files
+.vscode/
+.idea/
+*.swp
+*.swo
+.DS_Store
+Thumbs.db
+Desktop.ini
+
+# Tauri local config and generated bundles
+src-tauri/.tauri/
+src-tauri/bundle/
+
+# Temporary files
+tmp/
+temp/
+*.tmp
