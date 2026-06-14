@@ -125,6 +125,21 @@ export interface RegisteredAppRecord {
   last_launched_at?: string | null;
 }
 
+export interface DiscoveredAppCandidate {
+  id: string;
+  name: string;
+  normalized_name: string;
+  executable_path?: string | null;
+  source: string;
+  publisher?: string | null;
+  icon_path?: string | null;
+  confidence: "high" | "medium" | "low" | string;
+  is_registered: boolean;
+  is_blocked: boolean;
+  block_reason?: string | null;
+  detected_at: string;
+}
+
 export type CommandTemplateType = "npm" | "node" | "cargo" | "git_readonly" | "flutter" | "php_artisan" | "python" | "custom_safe";
 
 export interface CommandTemplateRecord {

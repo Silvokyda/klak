@@ -56,6 +56,8 @@ Structured project and workflow memory lives beside the general memory table. `s
 
 Registered apps live in `registered_apps` through `src/lib/apps/registeredAppsRepository.ts`. Records store a user-approved executable path, app type, allowed state, and launch timestamp.
 
+App discovery is transient. The native `scan_installed_apps` command reads bounded Windows registry sources, returns current suggestions, and does not persist candidates. The frontend shows suggestions for user selection. Before saving, `register_discovered_apps` rechecks selected suggestions against a fresh bounded scan and native launch validation, then the existing registered app repository persists only accepted apps.
+
 Command templates live in `command_templates` through `src/lib/commands/commandTemplateRepository.ts`. They store saved finite commands, project links, allowed working directories, risk, timeout, run count, and a short last-result summary.
 
 Background process records live in `background_processes` through `src/lib/processes/backgroundProcessRepository.ts`. They store the command template, project link, PID, status, output preview, and bounded output log path for Klak-managed long-running commands.
@@ -87,6 +89,8 @@ Implemented safe tools:
 Workflows do not add new execution powers. They are ordered collections of the implemented safe tools plus manual instructions. The workflow builder supports add, remove, reorder, type selection, risk display, command-template selection, and an advanced JSON editor. Workflow preview uses the same normalization and permission checks as individual suggested actions, and blocked steps prevent the workflow from running.
 
 The native `launch_registered_app` command validates that the executable exists, is a `.exe`, is not a blocked shell or terminal executable, and starts it with `std::process::Command` without shell interpolation or custom arguments.
+
+The native app discovery commands read Windows App Paths and installed-app uninstall metadata from HKCU/HKLM registry locations. They do not scan the whole disk, Downloads, temp folders, arbitrary folders, or random `.exe` files. Start Menu `.lnk` parsing is not implemented in v1, so shortcut-only apps may require manual registration until a safe shortcut parser is added.
 
 The native `run_command_template` command validates the working directory, splits the saved command into executable and arguments, maps Windows shims such as `npm` to `npm.cmd`, runs without shell interpolation, captures stdout/stderr, truncates output, and enforces a timeout.
 

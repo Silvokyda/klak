@@ -22,6 +22,21 @@ Use this checklist before major milestones. Keep tests local and visible.
 - Restart Klak and confirm stale activities from a previous session are marked as stale/unmanaged.
 - Confirm stale activities cannot be stopped by Klak.
 
+## General-User App Discovery
+
+- Open Apps.
+- Click Scan for apps.
+- Confirm suggestions appear from safe Windows app sources.
+- Confirm each suggestion shows name, source, path when available, publisher when available, confidence/status, and already-added or unsupported state.
+- Confirm dangerous/system tools such as PowerShell, CMD, Regedit, Diskpart, and script hosts are not offered as normal addable apps.
+- Select a safe app such as Chrome, Edge, Notepad, Word, Zoom, or VS Code.
+- Click Add selected apps.
+- Confirm only selected apps are added.
+- Confirm the same app cannot be added twice.
+- Launch the added app through Klak and confirm approval is required.
+- Confirm Activity History records scan, registration attempt, registered apps, and blocked/failed registration entries.
+- Confirm Start Menu shortcut-only apps may not appear in v1 unless they also have App Paths or uninstall registry metadata.
+
 ## Advanced Developer Use
 
 - Create a finite template such as `npm run build`, `cargo check`, or `git status --short`.
@@ -30,3 +45,5 @@ Use this checklist before major milestones. Keep tests local and visible.
 - Confirm a routine can include `start_background_process` for an approved long-running saved action.
 - Confirm a project card shows linked saved actions and running activities.
 - Confirm stop attempts, blocked duplicate starts, successes, and failures appear in Activity History.
+- Confirm developer tools such as VS Code, Postman, GitHub Desktop, and JetBrains apps can be discovered or manually registered when safe.
+- Confirm shells such as PowerShell, CMD, Windows Terminal, WSL, and Bash are blocked as normal apps.

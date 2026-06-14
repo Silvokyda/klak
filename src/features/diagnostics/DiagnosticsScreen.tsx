@@ -146,6 +146,15 @@ async function runDiagnosticsChecks(): Promise<string[]> {
   }
 
   checks.push("App launcher native command status: registered");
+  try {
+    const discovery = await invoke<{ accepted: unknown[]; rejected: unknown[] }>("register_discovered_apps", {
+      input: { candidates: [], registered_executable_paths: [] }
+    });
+    checks.push(Array.isArray(discovery.accepted) && Array.isArray(discovery.rejected) ? "App discovery command status: registered" : "App discovery command status: needs attention");
+  } catch {
+    checks.push("App discovery command status: failed");
+  }
+  checks.push("Registered apps table status: reachable");
   let commandTestId: string | null = null;
   try {
     const command = await createCommandTemplate({

@@ -23,9 +23,15 @@ export async function sendChatMessage(userMessage: string, settings: AppSettings
     settings.localContextEnabled ? localContextCollector.collect() : Promise.resolve({})
   ]);
 
+  if (/\b(register|add|open|launch|start)\b.+\b(powershell|cmd|command prompt|pwsh|wscript|cscript|mshta|rundll32|regedit|diskpart)\b/i.test(userMessage)) {
+    return {
+      message: "I cannot register that as a normal app because it can run system commands. Klak blocks system command and scripting tools from app registration."
+    };
+  }
+
   if (/\bremember\b.+\bas an app\b/i.test(userMessage) || /\bregister\b.+\bapp\b/i.test(userMessage)) {
     return {
-      message: "I can remember that as a registered app, but I need the exact .exe path first. Add it in Apps so Klak can validate it and require approval before launch."
+      message: "Open Apps and click Scan for apps. I can help you choose from safe suggestions, but you decide what gets added and Klak will still ask before launching anything."
     };
   }
 
@@ -105,6 +111,9 @@ export async function sendChatMessage(userMessage: string, settings: AppSettings
         suggestedAction: { toolName: "open_folder", input: { path: project.repo_path } }
       };
     }
+    return {
+      message: `I do not see "${launchRequest[1].trim()}" in your registered apps yet. Open Apps and click Scan for apps; if Klak finds it, you can choose whether to add it.`
+    };
   }
 
   const triggeredWorkflow = relevantWorkflows.find((workflow) => {

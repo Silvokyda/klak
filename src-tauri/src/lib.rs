@@ -4,9 +4,11 @@ use tauri::Manager;
 use tauri_plugin_sql::{Migration, MigrationKind};
 use wait_timeout::ChildExt;
 
+use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
 use std::fs;
 use std::fs::OpenOptions;
+use std::hash::{Hash, Hasher};
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
@@ -100,6 +102,39 @@ struct LaunchRegisteredAppInput {
 #[derive(serde::Deserialize)]
 struct ValidateRegisteredAppPathInput {
     executable_path: String,
+}
+
+#[derive(Clone, serde::Deserialize, serde::Serialize)]
+struct DiscoveredAppCandidate {
+    id: String,
+    name: String,
+    normalized_name: String,
+    executable_path: Option<String>,
+    source: String,
+    publisher: Option<String>,
+    icon_path: Option<String>,
+    confidence: String,
+    is_registered: bool,
+    is_blocked: bool,
+    block_reason: Option<String>,
+    detected_at: String,
+}
+
+#[derive(serde::Deserialize)]
+struct ScanInstalledAppsInput {
+    registered_executable_paths: Option<Vec<String>>,
+}
+
+#[derive(serde::Deserialize)]
+struct RegisterDiscoveredAppsInput {
+    candidates: Vec<DiscoveredAppCandidate>,
+    registered_executable_paths: Option<Vec<String>>,
+}
+
+#[derive(serde::Serialize)]
+struct RegisterDiscoveredAppsOutput {
+    accepted: Vec<DiscoveredAppCandidate>,
+    rejected: Vec<DiscoveredAppCandidate>,
 }
 
 #[derive(serde::Deserialize)]
@@ -245,34 +280,7 @@ fn copy_text_to_clipboard(text: String) -> Result<(), String> {
 
 #[tauri::command]
 fn launch_registered_app(input: LaunchRegisteredAppInput) -> Result<(), String> {
-    let executable = PathBuf::from(input.executable_path.trim());
-    if !executable.is_file() {
-        return Err("Registered app executable does not exist.".into());
-    }
-    if executable
-        .extension()
-        .and_then(|extension| extension.to_str())
-        .map(|extension| !extension.eq_ignore_ascii_case("exe"))
-        .unwrap_or(true)
-    {
-        return Err("Registered apps must point to a .exe file.".into());
-    }
-    let file_name = executable
-        .file_name()
-        .and_then(|name| name.to_str())
-        .unwrap_or("")
-        .to_lowercase();
-    let blocked = [
-        "powershell.exe",
-        "cmd.exe",
-        "wt.exe",
-        "windowsterminal.exe",
-        "bash.exe",
-        "wsl.exe",
-    ];
-    if blocked.iter().any(|name| *name == file_name) {
-        return Err("Shell and terminal apps are blocked in this pass.".into());
-    }
+    let executable = validate_launchable_app_path(&input.executable_path)?;
 
     Command::new(&executable)
         .spawn()
@@ -296,17 +304,9 @@ fn validate_registered_app_path(
         .and_then(|name| name.to_str())
         .unwrap_or("")
         .to_lowercase();
-    let blocked = [
-        "powershell.exe",
-        "cmd.exe",
-        "wt.exe",
-        "windowsterminal.exe",
-        "bash.exe",
-        "wsl.exe",
-    ];
-    let blocked_shell = blocked.iter().any(|name| *name == file_name);
+    let blocked_shell = is_blocked_app_executable_name(&file_name);
     let message = if blocked_shell {
-        "Shell and terminal apps are blocked in this pass."
+        "System command and scripting tools cannot be registered as normal apps."
     } else if !valid_extension {
         "Registered apps must point to a .exe file."
     } else if !exists {
@@ -321,6 +321,73 @@ fn validate_registered_app_path(
         blocked_shell,
         message: message.into(),
     })
+}
+
+#[tauri::command]
+fn scan_installed_apps(
+    input: ScanInstalledAppsInput,
+) -> Result<Vec<DiscoveredAppCandidate>, String> {
+    let registered_paths = normalized_registered_paths(input.registered_executable_paths);
+    scan_installed_apps_impl(&registered_paths)
+}
+
+#[tauri::command]
+fn register_discovered_apps(
+    input: RegisterDiscoveredAppsInput,
+) -> Result<RegisterDiscoveredAppsOutput, String> {
+    if input.candidates.is_empty() {
+        return Ok(RegisterDiscoveredAppsOutput {
+            accepted: Vec::new(),
+            rejected: Vec::new(),
+        });
+    }
+    let registered_paths = normalized_registered_paths(input.registered_executable_paths);
+    let discovered = scan_installed_apps_impl(&registered_paths)?;
+    let by_id: HashMap<String, DiscoveredAppCandidate> = discovered
+        .into_iter()
+        .map(|candidate| (candidate.id.clone(), candidate))
+        .collect();
+    let mut accepted = Vec::new();
+    let mut rejected = Vec::new();
+
+    for candidate in input.candidates {
+        let Some(current) = by_id.get(&candidate.id).cloned() else {
+            let mut rejected_candidate = candidate;
+            rejected_candidate.is_blocked = true;
+            rejected_candidate.block_reason =
+                Some("This suggestion was not found in the latest safe app scan.".into());
+            rejected.push(rejected_candidate);
+            continue;
+        };
+        if current.is_blocked {
+            rejected.push(current);
+            continue;
+        }
+        let Some(path) = current.executable_path.as_deref() else {
+            let mut rejected_candidate = current;
+            rejected_candidate.is_blocked = true;
+            rejected_candidate.block_reason = Some("No executable path was available.".into());
+            rejected.push(rejected_candidate);
+            continue;
+        };
+        if let Err(error) = validate_launchable_app_path(path) {
+            let mut rejected_candidate = current;
+            rejected_candidate.is_blocked = true;
+            rejected_candidate.block_reason = Some(error);
+            rejected.push(rejected_candidate);
+            continue;
+        }
+        if current.is_registered {
+            let mut rejected_candidate = current;
+            rejected_candidate.is_blocked = true;
+            rejected_candidate.block_reason = Some("This app is already registered.".into());
+            rejected.push(rejected_candidate);
+            continue;
+        }
+        accepted.push(current);
+    }
+
+    Ok(RegisterDiscoveredAppsOutput { accepted, rejected })
 }
 
 #[tauri::command]
@@ -585,6 +652,436 @@ fn resolve_program(program: &str) -> String {
 
 fn background_children() -> &'static Mutex<HashMap<String, Child>> {
     BACKGROUND_CHILDREN.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn validate_launchable_app_path(path: &str) -> Result<PathBuf, String> {
+    let executable = PathBuf::from(path.trim());
+    if !executable.is_file() {
+        return Err("Registered app executable does not exist.".into());
+    }
+    let file_name = executable
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    if is_blocked_app_executable_name(&file_name) {
+        return Err(
+            "System command and scripting tools cannot be registered as normal apps.".into(),
+        );
+    }
+    if executable
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| !extension.eq_ignore_ascii_case("exe"))
+        .unwrap_or(true)
+    {
+        return Err("Registered apps must point to a .exe file.".into());
+    }
+    executable
+        .canonicalize()
+        .map_err(|error| format!("Unable to resolve registered app path: {error}"))
+}
+
+fn is_blocked_app_executable_name(file_name: &str) -> bool {
+    matches!(
+        file_name.to_ascii_lowercase().as_str(),
+        "cmd.exe"
+            | "powershell.exe"
+            | "pwsh.exe"
+            | "wscript.exe"
+            | "cscript.exe"
+            | "mshta.exe"
+            | "rundll32.exe"
+            | "regsvr32.exe"
+            | "regedit.exe"
+            | "taskkill.exe"
+            | "shutdown.exe"
+            | "format.com"
+            | "diskpart.exe"
+            | "bcdedit.exe"
+            | "wt.exe"
+            | "windowsterminal.exe"
+            | "bash.exe"
+            | "wsl.exe"
+    )
+}
+
+fn normalized_registered_paths(paths: Option<Vec<String>>) -> Vec<String> {
+    paths
+        .unwrap_or_default()
+        .into_iter()
+        .filter_map(|path| normalize_path_for_compare(&path))
+        .collect()
+}
+
+fn normalize_path_for_compare(path: &str) -> Option<String> {
+    let trimmed = path.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let candidate = PathBuf::from(trimmed);
+    let resolved = candidate.canonicalize().unwrap_or(candidate);
+    Some(resolved.to_string_lossy().to_ascii_lowercase())
+}
+
+#[cfg(not(windows))]
+fn scan_installed_apps_impl(
+    _registered_paths: &[String],
+) -> Result<Vec<DiscoveredAppCandidate>, String> {
+    Ok(Vec::new())
+}
+
+#[cfg(windows)]
+fn scan_installed_apps_impl(
+    registered_paths: &[String],
+) -> Result<Vec<DiscoveredAppCandidate>, String> {
+    use winreg::enums::{
+        HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY,
+    };
+    use winreg::RegKey;
+
+    let detected_at = chrono_like_timestamp().to_string();
+    let mut candidates: HashMap<String, DiscoveredAppCandidate> = HashMap::new();
+    let publishers = collect_uninstall_metadata();
+
+    let app_path_roots = [
+        (
+            RegKey::predef(HKEY_CURRENT_USER),
+            "HKCU App Paths",
+            "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths",
+            KEY_READ,
+        ),
+        (
+            RegKey::predef(HKEY_LOCAL_MACHINE),
+            "HKLM App Paths",
+            "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths",
+            KEY_READ | KEY_WOW64_64KEY,
+        ),
+        (
+            RegKey::predef(HKEY_LOCAL_MACHINE),
+            "HKLM App Paths",
+            "Software\\Microsoft\\Windows\\CurrentVersion\\App Paths",
+            KEY_READ | KEY_WOW64_32KEY,
+        ),
+    ];
+
+    for (root, source, subkey, flags) in app_path_roots {
+        let Ok(key) = root.open_subkey_with_flags(subkey, flags) else {
+            continue;
+        };
+        for app_key_name in key.enum_keys().flatten().take(800) {
+            let Ok(app_key) = key.open_subkey_with_flags(&app_key_name, flags) else {
+                continue;
+            };
+            let path = app_key
+                .get_value::<String, _>("")
+                .ok()
+                .or_else(|| app_key.get_value::<String, _>("Path").ok());
+            if let Some(path) = path {
+                add_candidate(
+                    &mut candidates,
+                    &path,
+                    display_name_from_exe(&app_key_name),
+                    source,
+                    "high",
+                    &publishers,
+                    registered_paths,
+                    &detected_at,
+                );
+            }
+        }
+    }
+
+    let uninstall_roots = [
+        (
+            RegKey::predef(HKEY_CURRENT_USER),
+            "HKCU Installed Apps",
+            "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+            KEY_READ,
+        ),
+        (
+            RegKey::predef(HKEY_LOCAL_MACHINE),
+            "HKLM Installed Apps",
+            "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+            KEY_READ | KEY_WOW64_64KEY,
+        ),
+        (
+            RegKey::predef(HKEY_LOCAL_MACHINE),
+            "HKLM Installed Apps",
+            "Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+            KEY_READ | KEY_WOW64_32KEY,
+        ),
+    ];
+
+    for (root, source, subkey, flags) in uninstall_roots {
+        let Ok(key) = root.open_subkey_with_flags(subkey, flags) else {
+            continue;
+        };
+        for app_key_name in key.enum_keys().flatten().take(1200) {
+            let Ok(app_key) = key.open_subkey_with_flags(&app_key_name, flags) else {
+                continue;
+            };
+            let name = app_key
+                .get_value::<String, _>("DisplayName")
+                .unwrap_or_else(|_| display_name_from_exe(&app_key_name));
+            let publisher = app_key.get_value::<String, _>("Publisher").ok();
+            let icon = app_key.get_value::<String, _>("DisplayIcon").ok();
+            let install_location = app_key.get_value::<String, _>("InstallLocation").ok();
+            if let Some(path) =
+                icon.and_then(|value| extract_executable_from_registry_value(&value))
+            {
+                add_candidate_with_publisher(
+                    &mut candidates,
+                    &path,
+                    name.clone(),
+                    source,
+                    "medium",
+                    publisher.clone(),
+                    registered_paths,
+                    &detected_at,
+                );
+            } else if let Some(location) = install_location {
+                let guessed = PathBuf::from(location).join(format!("{}.exe", name));
+                if guessed.is_file() {
+                    add_candidate_with_publisher(
+                        &mut candidates,
+                        &guessed.to_string_lossy(),
+                        name,
+                        source,
+                        "low",
+                        publisher,
+                        registered_paths,
+                        &detected_at,
+                    );
+                }
+            }
+        }
+    }
+
+    let mut values: Vec<_> = candidates.into_values().collect();
+    values.sort_by(|left, right| {
+        left.is_blocked
+            .cmp(&right.is_blocked)
+            .then(left.name.to_lowercase().cmp(&right.name.to_lowercase()))
+    });
+    values.truncate(300);
+    Ok(values)
+}
+
+#[cfg(windows)]
+fn collect_uninstall_metadata() -> HashMap<String, Option<String>> {
+    use winreg::enums::{
+        HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY,
+    };
+    use winreg::RegKey;
+
+    let roots = [
+        (
+            RegKey::predef(HKEY_CURRENT_USER),
+            "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+            KEY_READ,
+        ),
+        (
+            RegKey::predef(HKEY_LOCAL_MACHINE),
+            "Software\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+            KEY_READ | KEY_WOW64_64KEY,
+        ),
+        (
+            RegKey::predef(HKEY_LOCAL_MACHINE),
+            "Software\\WOW6432Node\\Microsoft\\Windows\\CurrentVersion\\Uninstall",
+            KEY_READ | KEY_WOW64_32KEY,
+        ),
+    ];
+    let mut publishers = HashMap::new();
+    for (root, subkey, flags) in roots {
+        let Ok(key) = root.open_subkey_with_flags(subkey, flags) else {
+            continue;
+        };
+        for app_key_name in key.enum_keys().flatten().take(1200) {
+            let Ok(app_key) = key.open_subkey_with_flags(&app_key_name, flags) else {
+                continue;
+            };
+            let name = app_key.get_value::<String, _>("DisplayName").ok();
+            let publisher = app_key.get_value::<String, _>("Publisher").ok();
+            if let Some(name) = name {
+                publishers.insert(normalize_app_name(&name), publisher);
+            }
+        }
+    }
+    publishers
+}
+
+#[cfg(windows)]
+fn add_candidate(
+    candidates: &mut HashMap<String, DiscoveredAppCandidate>,
+    path: &str,
+    name: String,
+    source: &str,
+    confidence: &str,
+    publishers: &HashMap<String, Option<String>>,
+    registered_paths: &[String],
+    detected_at: &str,
+) {
+    let publisher = publishers
+        .get(&normalize_app_name(&name))
+        .cloned()
+        .flatten();
+    add_candidate_with_publisher(
+        candidates,
+        path,
+        name,
+        source,
+        confidence,
+        publisher,
+        registered_paths,
+        detected_at,
+    );
+}
+
+#[cfg(windows)]
+fn add_candidate_with_publisher(
+    candidates: &mut HashMap<String, DiscoveredAppCandidate>,
+    path: &str,
+    name: String,
+    source: &str,
+    confidence: &str,
+    publisher: Option<String>,
+    registered_paths: &[String],
+    detected_at: &str,
+) {
+    let Some(path) =
+        extract_executable_from_registry_value(path).or_else(|| Some(path.to_string()))
+    else {
+        return;
+    };
+    let executable = PathBuf::from(path.trim());
+    if !executable.is_file() {
+        return;
+    }
+    let resolved = match executable.canonicalize() {
+        Ok(path) => path,
+        Err(_) => return,
+    };
+    let executable_path = resolved.to_string_lossy().to_string();
+    let compare_path = executable_path.to_ascii_lowercase();
+    let file_name = resolved
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    let valid_extension = resolved
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.eq_ignore_ascii_case("exe"))
+        .unwrap_or(false);
+    let blocked = is_blocked_app_executable_name(&file_name);
+    let unsupported = !valid_extension;
+    let block_reason = if blocked {
+        Some("System command and scripting tools cannot be registered as normal apps.".into())
+    } else if unsupported {
+        Some("Only Windows .exe apps can be registered.".into())
+    } else {
+        None
+    };
+    let name = clean_display_name(&name, &file_name);
+    let normalized_name = normalize_app_name(&name);
+    let id = discovered_app_id(source, &compare_path);
+    let candidate = DiscoveredAppCandidate {
+        id: id.clone(),
+        name,
+        normalized_name,
+        executable_path: Some(executable_path),
+        source: source.into(),
+        publisher,
+        icon_path: None,
+        confidence: confidence.into(),
+        is_registered: registered_paths.iter().any(|path| path == &compare_path),
+        is_blocked: blocked || unsupported,
+        block_reason,
+        detected_at: detected_at.into(),
+    };
+
+    candidates
+        .entry(compare_path)
+        .and_modify(|existing| {
+            if confidence_rank(&candidate.confidence) > confidence_rank(&existing.confidence) {
+                *existing = candidate.clone();
+            } else if existing.publisher.is_none() && candidate.publisher.is_some() {
+                existing.publisher = candidate.publisher.clone();
+            }
+        })
+        .or_insert(candidate);
+}
+
+#[cfg(windows)]
+fn extract_executable_from_registry_value(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    if let Some(rest) = trimmed.strip_prefix('"') {
+        return rest.find('"').map(|end| rest[..end].to_string());
+    }
+    let lower = trimmed.to_ascii_lowercase();
+    lower
+        .find(".exe")
+        .map(|index| trimmed[..index + 4].trim_end_matches(',').to_string())
+}
+
+fn clean_display_name(value: &str, fallback_file_name: &str) -> String {
+    let cleaned = value
+        .trim()
+        .trim_end_matches(".exe")
+        .replace(['_', '-'], " ");
+    if cleaned.is_empty() {
+        display_name_from_exe(fallback_file_name)
+    } else {
+        cleaned
+    }
+}
+
+fn display_name_from_exe(value: &str) -> String {
+    let stem = Path::new(value)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or(value)
+        .replace(['_', '-'], " ");
+    stem.split_whitespace()
+        .map(|part| {
+            let mut chars = part.chars();
+            match chars.next() {
+                Some(first) => format!("{}{}", first.to_uppercase(), chars.as_str()),
+                None => String::new(),
+            }
+        })
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn normalize_app_name(value: &str) -> String {
+    value
+        .trim()
+        .to_ascii_lowercase()
+        .replace(".exe", "")
+        .split_whitespace()
+        .collect::<Vec<_>>()
+        .join(" ")
+}
+
+fn discovered_app_id(source: &str, executable_path: &str) -> String {
+    let mut hasher = DefaultHasher::new();
+    source.hash(&mut hasher);
+    executable_path.hash(&mut hasher);
+    format!("disc_{:x}", hasher.finish())
+}
+
+fn confidence_rank(value: &str) -> u8 {
+    match value {
+        "high" => 3,
+        "medium" => 2,
+        "low" => 1,
+        _ => 0,
+    }
 }
 
 fn resolve_background_log_path(value: &str) -> Result<PathBuf, String> {
@@ -915,6 +1412,8 @@ pub fn run() {
             copy_text_to_clipboard,
             launch_registered_app,
             validate_registered_app_path,
+            scan_installed_apps,
+            register_discovered_apps,
             run_command_template,
             start_background_process,
             stop_background_process,
