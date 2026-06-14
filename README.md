@@ -40,14 +40,16 @@ npm run tauri build
 - SQLite tables store memories, projects, workflows, registered apps, command templates, background processes, action logs, non-secret app settings, tool settings, and allowed folders.
 - API keys are stored through `secretStore`. In native Tauri, Klak uses Windows-backed storage through the Rust `keyring` crate. In browser-only development, Klak falls back to `insecureDevSecretStore.ts` and warns: "Development storage is active. Do not use production keys."
 - Implemented safe tools: `open_url`, `open_folder`, `launch_app`, `run_command_template`, `start_background_process`, `create_note`, `copy_to_clipboard`, `search_memory`, and `create_memory`. They all go through permission checks, action previews, approval/denial, and audit logging.
-- The Apps screen lets users register approved `.exe` applications. Klak can launch only those registered apps, never arbitrary shell commands or arguments.
+- The Apps screen can scan bounded Windows app metadata for safe suggestions, and users explicitly choose which `.exe` applications to register. Klak can launch only registered apps, never arbitrary shell commands or arguments.
 - Dangerous tools are registered as disabled future extension points and blocked by the permission system.
 - Voice input is opt-in and push-to-talk only. Klak does not listen in the background and does not upload audio.
 - No telemetry, analytics, accounts, hosted backend, cloud sync, screenshot capture, browser automation, terminal execution, or unrestricted clipboard/file reading is implemented.
 
 ## Registered Apps And Startup Workflows
 
-Register VS Code safely from Apps with its exact executable path, for example `C:\Users\<you>\AppData\Local\Programs\Microsoft VS Code\Code.exe`, type `editor`, and `Allowed` enabled. Klak blocks shell and terminal executables such as `powershell.exe`, `cmd.exe`, `wt.exe`, `WindowsTerminal.exe`, `bash.exe`, and `wsl.exe`.
+Click Scan for apps in Apps to find safe suggestions from Windows App Paths and installed-app registry metadata. Klak prioritizes recognizable user-facing apps, shows icons when Windows exposes them, and separates technical helpers, installers, update tools, and unsupported system items behind a toggle. Select only the apps you want Klak to remember, then click Add selected apps. You can still register manually with an exact executable path when needed.
+
+Klak blocks system command, scripting, and CLI tools such as `powershell.exe`, `cmd.exe`, `pwsh.exe`, `winget.exe`, `python.exe`, `py.exe`, `ngrok.exe`, `wscript.exe`, `cscript.exe`, `mshta.exe`, `rundll32.exe`, `regedit.exe`, `diskpart.exe`, `wt.exe`, `WindowsTerminal.exe`, `bash.exe`, and `wsl.exe`. App discovery v1 does not parse Start Menu `.lnk` shortcuts, so shortcut-only apps may need manual registration.
 
 Workflows can be built with the step builder or the advanced JSON editor. Supported steps are `open_url`, `open_folder`, `launch_app`, `create_note`, `copy_to_clipboard`, `search_memory`, `create_memory`, and `manual_instruction`.
 

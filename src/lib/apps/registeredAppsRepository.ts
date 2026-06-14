@@ -2,7 +2,35 @@ import type { RegisteredAppRecord, RegisteredAppType } from "../../types";
 import { getDatabase } from "../db/database";
 import { id, nowIso } from "../utils";
 
-export const blockedShellAppNames = new Set(["powershell.exe", "cmd.exe", "wt.exe", "windowsterminal.exe", "bash.exe", "wsl.exe"]);
+export const blockedShellAppNames = new Set([
+  "cmd.exe",
+  "powershell.exe",
+  "pwsh.exe",
+  "winget.exe",
+  "python.exe",
+  "python3.exe",
+  "pythonw.exe",
+  "py.exe",
+  "pyw.exe",
+  "pymanager.exe",
+  "pywmanager.exe",
+  "ngrok.exe",
+  "wscript.exe",
+  "cscript.exe",
+  "mshta.exe",
+  "rundll32.exe",
+  "regsvr32.exe",
+  "regedit.exe",
+  "taskkill.exe",
+  "shutdown.exe",
+  "format.com",
+  "diskpart.exe",
+  "bcdedit.exe",
+  "wt.exe",
+  "windowsterminal.exe",
+  "bash.exe",
+  "wsl.exe"
+]);
 
 export interface RegisteredAppInput {
   name: string;
@@ -19,6 +47,8 @@ export interface RegisteredAppFilters {
 export async function createRegisteredApp(input: RegisteredAppInput): Promise<RegisteredAppRecord> {
   validateRegisteredAppInput(input);
   const db = await getDatabase();
+  const duplicate = await findRegisteredAppByExecutablePath(input.executable_path);
+  if (duplicate) throw new Error(`${duplicate.name} is already registered.`);
   const timestamp = nowIso();
   const app: RegisteredAppRecord = {
     id: id("app"),
@@ -51,6 +81,8 @@ export async function updateRegisteredApp(appId: string, input: Partial<Register
     updated_at: nowIso()
   };
   validateRegisteredAppInput(updated);
+  const duplicate = await findRegisteredAppByExecutablePath(updated.executable_path);
+  if (duplicate && duplicate.id !== appId) throw new Error(`${duplicate.name} is already registered.`);
   const db = await getDatabase();
   await db.execute(
     `UPDATE registered_apps
@@ -94,6 +126,14 @@ export async function searchRegisteredApps(query: string): Promise<RegisteredApp
   return rows.map(fromDb);
 }
 
+export async function findRegisteredAppByExecutablePath(executablePath: string): Promise<RegisteredAppRecord | null> {
+  const db = await getDatabase();
+  const rows = await db.select<DbRegisteredApp>("SELECT * FROM registered_apps ORDER BY updated_at DESC");
+  const normalized = normalizeExecutablePath(executablePath);
+  const match = rows.map(fromDb).find((app) => normalizeExecutablePath(app.executable_path) === normalized);
+  return match ?? null;
+}
+
 export async function touchRegisteredApp(appId: string): Promise<void> {
   const db = await getDatabase();
   await db.execute("UPDATE registered_apps SET last_launched_at = ? WHERE id = ?", [nowIso(), appId]);
@@ -107,8 +147,8 @@ export function validateRegisteredAppInput(input: Pick<RegisteredAppInput, "name
 export function validateExecutablePath(path: string): void {
   const trimmed = path.trim();
   if (!trimmed) throw new Error("Executable path is required.");
+  if (isBlockedShellExecutable(trimmed)) throw new Error("System command and scripting tools cannot be registered as normal apps.");
   if (!trimmed.toLowerCase().endsWith(".exe")) throw new Error("Registered apps must point to a .exe file.");
-  if (isBlockedShellExecutable(trimmed)) throw new Error("Shell and terminal apps are blocked in this pass.");
 }
 
 export function isBlockedShellExecutable(path: string): boolean {
@@ -122,4 +162,8 @@ interface DbRegisteredApp extends Omit<RegisteredAppRecord, "allowed"> {
 
 function fromDb(row: DbRegisteredApp): RegisteredAppRecord {
   return { ...row, allowed: Boolean(row.allowed) };
+}
+
+function normalizeExecutablePath(path: string): string {
+  return path.trim().replace(/\//g, "\\").toLowerCase();
 }
