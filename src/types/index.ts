@@ -81,6 +81,65 @@ export interface AllowedFolder {
   created_at: string;
 }
 
+export type ProjectType =
+  | "web_app"
+  | "mobile_app"
+  | "backend"
+  | "desktop_app"
+  | "ai_project"
+  | "documentation"
+  | "business"
+  | "other";
+
+export type ProjectStatus = "active" | "paused" | "archived";
+
+export interface ProjectRecord {
+  id: string;
+  name: string;
+  description?: string | null;
+  repo_path?: string | null;
+  primary_stack?: string | null;
+  project_type: ProjectType;
+  status: ProjectStatus;
+  default_branch?: string | null;
+  dev_url?: string | null;
+  production_url?: string | null;
+  notes?: string | null;
+  created_at: string;
+  updated_at: string;
+  last_opened_at?: string | null;
+}
+
+export type WorkflowStepType =
+  | "open_url"
+  | "open_folder"
+  | "create_note"
+  | "copy_to_clipboard"
+  | "search_memory"
+  | "create_memory"
+  | "manual_instruction";
+
+export interface WorkflowStep {
+  type: WorkflowStepType;
+  label?: string;
+  input: Record<string, unknown>;
+}
+
+export interface WorkflowRecord {
+  id: string;
+  project_id?: string | null;
+  name: string;
+  description?: string | null;
+  trigger_phrase?: string | null;
+  steps_json: string;
+  risk_level: RiskLevel;
+  requires_confirmation: boolean;
+  created_at: string;
+  updated_at: string;
+  last_run_at?: string | null;
+  run_count: number;
+}
+
 export interface LocalContextSnapshot {
   activeWindowTitle?: string;
   currentBrowserUrl?: string;
@@ -93,6 +152,8 @@ export interface LocalContextSnapshot {
 export interface AIRequest {
   userMessage: string;
   relevantMemories: MemoryRecord[];
+  relevantProjects?: ProjectRecord[];
+  relevantWorkflows?: WorkflowRecord[];
   currentPermissionMode: PermissionMode;
   availableTools: ToolDefinition[];
   recentActionLogs: ActionLog[];

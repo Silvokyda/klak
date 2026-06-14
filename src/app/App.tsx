@@ -1,17 +1,20 @@
-import { Bot, Database, History, Settings, ShieldCheck, Wrench } from "lucide-react";
+import { Activity, Bot, Briefcase, Database, GitBranch, History, Settings, ShieldCheck, Wrench } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { AppSettings } from "../types";
 import { AssistantScreen } from "../features/chat/AssistantScreen";
+import { DiagnosticsScreen } from "../features/diagnostics/DiagnosticsScreen";
 import { LogsScreen } from "../features/logs/LogsScreen";
 import { MemoryScreen } from "../features/memory/MemoryScreen";
+import { ProjectsScreen } from "../features/projects/ProjectsScreen";
 import { SettingsScreen } from "../features/settings/SettingsScreen";
 import { SetupFlow } from "../features/setup/SetupFlow";
 import { ToolsScreen } from "../features/tools/ToolsScreen";
+import { WorkflowsScreen } from "../features/workflows/WorkflowsScreen";
 import { defaultSettings, loadSettings, saveSettings } from "../lib/storage/settings";
 import { labelPermissionMode } from "../lib/utils";
 import { initDatabase } from "../lib/db/database";
 
-type View = "assistant" | "memory" | "tools" | "logs" | "settings";
+type View = "assistant" | "projects" | "workflows" | "memory" | "tools" | "logs" | "diagnostics" | "settings";
 
 export function App() {
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
@@ -33,9 +36,12 @@ export function App() {
   const nav = useMemo(
     () => [
       { id: "assistant" as const, label: "Assistant", icon: Bot },
+      { id: "projects" as const, label: "Projects", icon: Briefcase },
+      { id: "workflows" as const, label: "Workflows", icon: GitBranch },
       { id: "memory" as const, label: "Memory", icon: Database },
       { id: "tools" as const, label: "Tools", icon: Wrench },
       { id: "logs" as const, label: "Logs", icon: History },
+      { id: "diagnostics" as const, label: "Diagnostics", icon: Activity },
       { id: "settings" as const, label: "Settings", icon: Settings }
     ],
     []
@@ -76,9 +82,12 @@ export function App() {
 
       <main className="main">
         {view === "assistant" && <AssistantScreen settings={settings} />}
+        {view === "projects" && <ProjectsScreen />}
+        {view === "workflows" && <WorkflowsScreen settings={settings} />}
         {view === "memory" && <MemoryScreen />}
         {view === "tools" && <ToolsScreen settings={settings} onSettingsChange={updateSettings} />}
         {view === "logs" && <LogsScreen />}
+        {view === "diagnostics" && <DiagnosticsScreen settings={settings} />}
         {view === "settings" && <SettingsScreen settings={settings} onSettingsChange={updateSettings} />}
       </main>
     </div>

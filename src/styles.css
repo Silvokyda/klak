@@ -188,7 +188,7 @@ textarea {
   min-height: calc(100vh - 196px);
 }
 
-.chat-log, .action-panel, .editor, .table, .settings-grid, .preview {
+.chat-log, .action-panel, .editor, .table, .settings-grid, .preview, .preview-text {
   background: #fff;
   border: 1px solid #dde3ea;
   border-radius: 8px;
@@ -277,12 +277,23 @@ textarea {
   gap: 12px;
 }
 
+.project-editor textarea {
+  min-height: 72px;
+}
+
+.form-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 10px;
+  align-items: center;
+}
+
 .list {
   display: grid;
   gap: 12px;
 }
 
-.list-row, .tool-card {
+.list-row, .tool-card, .metric {
   background: #fff;
   border: 1px solid #dde3ea;
   border-radius: 8px;
@@ -297,6 +308,16 @@ textarea {
 
 .list-row div {
   display: grid;
+  gap: 8px;
+}
+
+.project-row, .workflow-row {
+  grid-template-columns: minmax(0, 1fr) auto;
+}
+
+.row-actions {
+  display: flex;
+  flex-direction: column;
   gap: 8px;
 }
 
@@ -341,6 +362,38 @@ textarea {
 
 .tool-card p {
   color: #5f6f80;
+}
+
+.code-input {
+  min-height: 150px;
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  font-size: 13px;
+}
+
+.preview-text {
+  margin: 0;
+  padding: 14px;
+  white-space: pre-wrap;
+  line-height: 1.45;
+  color: #334253;
+}
+
+.metric-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
+  gap: 12px;
+}
+
+.metric {
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 6px 10px;
+  align-items: center;
+}
+
+.metric strong {
+  grid-column: 1 / -1;
+  font-size: 28px;
 }
 
 .toggle {

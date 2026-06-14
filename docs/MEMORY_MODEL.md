@@ -14,6 +14,8 @@ Memories are stored in the local SQLite `memories` table in the Tauri app. Brows
 - `document`: user-approved document context.
 - `command_history`: user-approved command or workflow history.
 
+Projects and workflows also have dedicated local tables. Use `project` and `workflow` memories for narrative facts and user preferences; use the `projects` and `workflows` records for structured fields such as repository path, status, trigger phrase, and workflow steps.
+
 ## When To Save Memory
 
 Klak should not silently save everything as permanent memory. Memory should be saved when:
@@ -45,3 +47,11 @@ The repository functions are:
 API keys and other secrets must never be stored as memories.
 
 The safe `create_memory` tool is intended for user-approved facts, preferences, project notes, workflows, tasks, documents, and command history. If content appears to contain credentials, tokens, API keys, or passwords, it should be refused or redirected to secret storage rather than memory.
+
+## Project and Workflow Memory
+
+Project records are managed by `src/lib/projects/projectRepository.ts` and store local context such as name, repository path, stack, status, URLs, and notes.
+
+Workflow records are managed by `src/lib/workflows/workflowRepository.ts` and store repeatable local workflows as JSON steps. Workflow execution is limited to the existing safe tool registry: URL opening, allowed-folder opening, note creation inside allowed folders, clipboard writing, memory search, and memory creation. Manual instructions are shown as human-readable steps and are not executed by the app.
+
+Assistant requests include relevant memories, projects, and workflow summaries. Saved workflow trigger phrases are detected locally; the assistant points the user to the Workflows screen for preview and confirmation rather than running workflows silently.

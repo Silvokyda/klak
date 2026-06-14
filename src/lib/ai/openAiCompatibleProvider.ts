@@ -35,6 +35,14 @@ export class OpenAICompatibleProvider implements AIProvider {
             content: JSON.stringify({
               message: input.userMessage,
               memories: input.relevantMemories,
+              projects: input.relevantProjects ?? [],
+              workflows: (input.relevantWorkflows ?? []).map((workflow) => ({
+                id: workflow.id,
+                name: workflow.name,
+                description: workflow.description,
+                triggerPhrase: workflow.trigger_phrase,
+                riskLevel: workflow.risk_level
+              })),
               permissionMode: input.currentPermissionMode,
               availableTools: input.availableTools.map((tool) => ({
                 name: tool.name,

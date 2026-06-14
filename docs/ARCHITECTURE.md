@@ -21,6 +21,8 @@ Browser-only Vite development uses `klak.insecure_dev_database.v1` in localStora
 SQLite stores:
 
 - `memories`
+- `projects`
+- `workflows`
 - `action_logs`
 - `app_settings`
 - `tool_settings`
@@ -47,6 +49,8 @@ Memory is managed through `src/lib/memory/memoryRepository.ts`. The MVP supports
 
 Search starts as simple local text matching. The repository boundary is intentionally narrow so vector search can be added later without changing feature screens.
 
+Structured project and workflow memory lives beside the general memory table. `src/lib/projects/projectRepository.ts` stores project facts and status; `src/lib/workflows/workflowRepository.ts` stores workflow definitions, builds safe previews, and runs only approved existing tools. The assistant orchestrator searches these repositories with the user message and passes concise context to the AI provider.
+
 ## Tool System
 
 Tools are declared in `src/lib/tools/toolRegistry.ts`. Safe MVP tools are enabled where appropriate. Dangerous or future tools are present as disabled extension points:
@@ -68,6 +72,8 @@ Implemented safe tools:
 - `copy_to_clipboard`: writes clipboard text only after approval and never reads clipboard automatically.
 - `search_memory`: searches local memory and logs the query summary.
 - `create_memory`: creates memory only through explicit request or approved preview.
+
+Workflows do not add new execution powers. They are ordered collections of the implemented safe tools plus manual instructions. Workflow preview uses the same normalization and permission checks as individual suggested actions, and blocked steps prevent the workflow from running.
 
 ## Secrets
 

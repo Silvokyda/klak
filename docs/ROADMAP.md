@@ -13,8 +13,9 @@
 
 ## Phase 0.2
 
-- Project memory
-- Workflow memory
+- Project memory screen and repository
+- Workflow memory screen, safe preview, and safe execution
+- Diagnostics screen
 - Improved memory search
 - App launcher
 - Voice QA polish and device selection

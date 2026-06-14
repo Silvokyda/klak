@@ -43,4 +43,36 @@ CREATE TABLE IF NOT EXISTS allowed_folders (
   label TEXT,
   created_at TEXT NOT NULL
 );
+
+CREATE TABLE IF NOT EXISTS projects (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  description TEXT,
+  repo_path TEXT,
+  primary_stack TEXT,
+  project_type TEXT,
+  status TEXT,
+  default_branch TEXT,
+  dev_url TEXT,
+  production_url TEXT,
+  notes TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_opened_at TEXT
+);
+
+CREATE TABLE IF NOT EXISTS workflows (
+  id TEXT PRIMARY KEY,
+  project_id TEXT,
+  name TEXT NOT NULL,
+  description TEXT,
+  trigger_phrase TEXT,
+  steps_json TEXT NOT NULL,
+  risk_level TEXT NOT NULL,
+  requires_confirmation INTEGER DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_run_at TEXT,
+  run_count INTEGER DEFAULT 0
+);
 `;

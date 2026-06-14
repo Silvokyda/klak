@@ -39,6 +39,8 @@ export async function resetLocalDatabase(): Promise<void> {
   await db.execute("DELETE FROM app_settings");
   await db.execute("DELETE FROM tool_settings");
   await db.execute("DELETE FROM allowed_folders");
+  await db.execute("DELETE FROM projects");
+  await db.execute("DELETE FROM workflows");
 }
 
 async function createAdapter(): Promise<DbAdapter> {
@@ -69,6 +71,8 @@ function createInsecureDevDatabase(): DbAdapter {
     app_settings: Row[];
     tool_settings: Row[];
     allowed_folders: Row[];
+    projects: Row[];
+    workflows: Row[];
     schema_migrations: Row[];
   };
 
@@ -78,6 +82,8 @@ function createInsecureDevDatabase(): DbAdapter {
     app_settings: [],
     tool_settings: [],
     allowed_folders: [],
+    projects: [],
+    workflows: [],
     schema_migrations: []
   });
 
@@ -100,6 +106,18 @@ function createInsecureDevDatabase(): DbAdapter {
       else if (normalized.startsWith("INSERT INTO TOOL_SETTINGS")) upsertByToolName(state.tool_settings, { tool_name: bindValues[0], enabled: bindValues[1], updated_at: bindValues[2] });
       else if (normalized.startsWith("INSERT INTO ALLOWED_FOLDERS")) upsert(state.allowed_folders, { id: bindValues[0], path: bindValues[1], label: bindValues[2], created_at: bindValues[3] });
       else if (normalized.startsWith("DELETE FROM ALLOWED_FOLDERS")) removeById(state.allowed_folders, String(bindValues[0]));
+      else if (normalized.startsWith("INSERT INTO PROJECTS")) upsert(state.projects, projectRow(bindValues));
+      else if (normalized.startsWith("UPDATE PROJECTS SET LAST_OPENED_AT")) updateById(state.projects, String(bindValues[1]), { last_opened_at: bindValues[0] });
+      else if (normalized.startsWith("UPDATE PROJECTS")) updateById(state.projects, String(bindValues[11]), projectPatch(bindValues));
+      else if (normalized.startsWith("DELETE FROM PROJECTS")) removeById(state.projects, String(bindValues[0]));
+      else if (normalized.startsWith("INSERT INTO WORKFLOWS")) upsert(state.workflows, workflowRow(bindValues));
+      else if (normalized.startsWith("UPDATE WORKFLOWS SET LAST_RUN_AT")) {
+        const id = String(bindValues[1]);
+        const workflow = state.workflows.find((row) => row.id === id);
+        updateById(state.workflows, id, { last_run_at: bindValues[0], run_count: Number(workflow?.run_count ?? 0) + 1 });
+      }
+      else if (normalized.startsWith("UPDATE WORKFLOWS")) updateById(state.workflows, String(bindValues[10]), workflowPatch(bindValues));
+      else if (normalized.startsWith("DELETE FROM WORKFLOWS")) removeById(state.workflows, String(bindValues[0]));
       else if (normalized.startsWith("DELETE FROM")) {
         const table = normalized.split(" ")[2].toLowerCase() as keyof State;
         if (Array.isArray(state[table])) state[table] = [];
@@ -116,6 +134,8 @@ function createInsecureDevDatabase(): DbAdapter {
       else if (normalized.includes("FROM APP_SETTINGS")) rows = selectSettings(state.app_settings, normalized, bindValues);
       else if (normalized.includes("FROM TOOL_SETTINGS")) rows = selectToolSettings(state.tool_settings, normalized, bindValues);
       else if (normalized.includes("FROM ALLOWED_FOLDERS")) rows = [...state.allowed_folders].sort(sortCreatedDesc);
+      else if (normalized.includes("FROM PROJECTS")) rows = selectProjects(state.projects, normalized, bindValues);
+      else if (normalized.includes("FROM WORKFLOWS")) rows = selectWorkflows(state.workflows, normalized, bindValues);
       return rows as T[];
     }
   };
@@ -173,6 +193,26 @@ function actionPatch(values: BindValue[]): Row {
   return { tool_name, input_summary, risk_level, status, user_approved, completed_at, error_message };
 }
 
+function projectRow(values: BindValue[]): Row {
+  const [id, name, description, repo_path, primary_stack, project_type, status, default_branch, dev_url, production_url, notes, created_at, updated_at, last_opened_at] = values;
+  return { id, name, description, repo_path, primary_stack, project_type, status, default_branch, dev_url, production_url, notes, created_at, updated_at, last_opened_at };
+}
+
+function projectPatch(values: BindValue[]): Row {
+  const [name, description, repo_path, primary_stack, project_type, status, default_branch, dev_url, production_url, notes, updated_at] = values;
+  return { name, description, repo_path, primary_stack, project_type, status, default_branch, dev_url, production_url, notes, updated_at };
+}
+
+function workflowRow(values: BindValue[]): Row {
+  const [id, project_id, name, description, trigger_phrase, steps_json, risk_level, requires_confirmation, created_at, updated_at, last_run_at, run_count] = values;
+  return { id, project_id, name, description, trigger_phrase, steps_json, risk_level, requires_confirmation, created_at, updated_at, last_run_at, run_count };
+}
+
+function workflowPatch(values: BindValue[]): Row {
+  const [project_id, name, description, trigger_phrase, steps_json, risk_level, requires_confirmation, updated_at, last_run_at, run_count] = values;
+  return { project_id, name, description, trigger_phrase, steps_json, risk_level, requires_confirmation, updated_at, last_run_at, run_count };
+}
+
 function selectMemories(rows: Row[], sql: string, values: BindValue[]): Row[] {
   let result = rows.filter((row) => !row.expires_at || Date.parse(String(row.expires_at)) > Date.now());
   if (sql.includes("WHERE ID =")) result = result.filter((row) => row.id === values[0]);
@@ -199,6 +239,26 @@ function selectSettings(rows: Row[], sql: string, values: BindValue[]): Row[] {
 function selectToolSettings(rows: Row[], sql: string, values: BindValue[]): Row[] {
   if (sql.includes("WHERE TOOL_NAME =")) return rows.filter((row) => row.tool_name === values[0]);
   return rows;
+}
+
+function selectProjects(rows: Row[], sql: string, values: BindValue[]): Row[] {
+  let result = [...rows];
+  if (sql.includes("WHERE ID =")) result = result.filter((row) => row.id === values[0]);
+  else if (sql.includes("LIKE")) {
+    const query = String(values[0] ?? "").replace(/%/g, "").toLowerCase();
+    result = result.filter((row) => `${row.name} ${row.description} ${row.repo_path} ${row.primary_stack} ${row.notes}`.toLowerCase().includes(query));
+  } else if (sql.includes("STATUS =")) result = result.filter((row) => row.status === values[0]);
+  return result.sort((a, b) => Date.parse(String(b.updated_at)) - Date.parse(String(a.updated_at)));
+}
+
+function selectWorkflows(rows: Row[], sql: string, values: BindValue[]): Row[] {
+  let result = [...rows];
+  if (sql.includes("WHERE ID =")) result = result.filter((row) => row.id === values[0]);
+  else if (sql.includes("LIKE")) {
+    const query = String(values[0] ?? "").replace(/%/g, "").toLowerCase();
+    result = result.filter((row) => `${row.name} ${row.description} ${row.trigger_phrase} ${row.steps_json}`.toLowerCase().includes(query));
+  } else if (sql.includes("PROJECT_ID =")) result = result.filter((row) => row.project_id === values[0]);
+  return result.sort((a, b) => Date.parse(String(b.updated_at)) - Date.parse(String(a.updated_at)));
 }
 
 function sortCreatedDesc(a: Row, b: Row) {

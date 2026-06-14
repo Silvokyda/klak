@@ -4,14 +4,29 @@ import { searchMemories } from "../memory/memoryRepository";
 import { listTools } from "../tools/toolRegistry";
 import { OpenAICompatibleProvider } from "./openAiCompatibleProvider";
 import { localContextCollector } from "../context/localContext";
+import { searchProjects } from "../projects/projectRepository";
+import { searchWorkflows } from "../workflows/workflowRepository";
 
 export async function sendChatMessage(userMessage: string, settings: AppSettings): Promise<AIResponse> {
-  const [relevantMemories, availableTools, recentActionLogs, localContext] = await Promise.all([
+  const [relevantMemories, relevantProjects, relevantWorkflows, availableTools, recentActionLogs, localContext] = await Promise.all([
     searchMemories(userMessage),
+    searchProjects(userMessage),
+    searchWorkflows(userMessage),
     listTools(settings.allToolsDisabled),
     listActionLogs(),
     settings.localContextEnabled ? localContextCollector.collect() : Promise.resolve({})
   ]);
+
+  const triggeredWorkflow = relevantWorkflows.find((workflow) => {
+    const phrase = workflow.trigger_phrase?.trim();
+    return phrase ? userMessage.toLowerCase().includes(phrase.toLowerCase()) : false;
+  });
+
+  if (triggeredWorkflow) {
+    return {
+      message: `I found the saved workflow "${triggeredWorkflow.name}". Open Workflows to preview and run it with confirmation.`
+    };
+  }
 
   if (looksLikeRememberRequest(userMessage)) {
     return {
@@ -77,6 +92,8 @@ export async function sendChatMessage(userMessage: string, settings: AppSettings
   return provider.generateResponse({
     userMessage,
     relevantMemories: relevantMemories.slice(0, 8),
+    relevantProjects: relevantProjects.slice(0, 5),
+    relevantWorkflows: relevantWorkflows.slice(0, 5),
     currentPermissionMode: settings.permissionMode,
     availableTools,
     recentActionLogs: recentActionLogs.slice(0, 10),
