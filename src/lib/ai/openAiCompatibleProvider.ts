@@ -49,6 +49,15 @@ export class OpenAICompatibleProvider implements AIProvider {
                 appType: app.app_type,
                 allowed: app.allowed
               })),
+              commandTemplates: (input.relevantCommandTemplates ?? []).map((command) => ({
+                id: command.id,
+                projectId: command.project_id,
+                name: command.name,
+                command: command.command,
+                commandType: command.command_type,
+                riskLevel: command.risk_level,
+                enabled: command.enabled
+              })),
               permissionMode: input.currentPermissionMode,
               availableTools: input.availableTools.map((tool) => ({
                 name: tool.name,

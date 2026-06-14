@@ -2,8 +2,9 @@ import { invoke } from "@tauri-apps/api/core";
 import { Activity, RefreshCw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { ScreenHeader } from "../../components/ScreenHeader";
-import type { ActionLog, AppSettings, ProjectRecord, RegisteredAppRecord, ToolDefinition, WorkflowRecord } from "../../types";
+import type { ActionLog, AppSettings, CommandTemplateRecord, ProjectRecord, RegisteredAppRecord, ToolDefinition, WorkflowRecord } from "../../types";
 import { createRegisteredApp, deleteRegisteredApp, isBlockedShellExecutable, listRegisteredApps, validateExecutablePath } from "../../lib/apps/registeredAppsRepository";
+import { createCommandTemplate, deleteCommandTemplate, listCommandTemplates, validateCommandSafety } from "../../lib/commands/commandTemplateRepository";
 import { listActionLogs } from "../../lib/logs/actionLogRepository";
 import { listProjects } from "../../lib/projects/projectRepository";
 import { listTools } from "../../lib/tools/toolRegistry";
@@ -13,6 +14,7 @@ interface DiagnosticsSnapshot {
   projects: ProjectRecord[];
   workflows: WorkflowRecord[];
   registeredApps: RegisteredAppRecord[];
+  commandTemplates: CommandTemplateRecord[];
   tools: ToolDefinition[];
   logs: ActionLog[];
   checks: string[];
@@ -22,15 +24,16 @@ export function DiagnosticsScreen({ settings }: { settings: AppSettings }) {
   const [snapshot, setSnapshot] = useState<DiagnosticsSnapshot | null>(null);
 
   async function refresh() {
-    const [projects, workflows, registeredApps, tools, logs, checks] = await Promise.all([
+    const [projects, workflows, registeredApps, commandTemplates, tools, logs, checks] = await Promise.all([
       listProjects(),
       listWorkflows(),
       listRegisteredApps(),
+      listCommandTemplates(),
       listTools(settings.allToolsDisabled),
       listActionLogs(),
       runDiagnosticsChecks()
     ]);
-    setSnapshot({ projects, workflows, registeredApps, tools, logs, checks });
+    setSnapshot({ projects, workflows, registeredApps, commandTemplates, tools, logs, checks });
   }
 
   useEffect(() => {
@@ -51,6 +54,7 @@ export function DiagnosticsScreen({ settings }: { settings: AppSettings }) {
         <Metric label="Projects" value={snapshot?.projects.length ?? 0} />
         <Metric label="Workflows" value={snapshot?.workflows.length ?? 0} />
         <Metric label="Registered apps" value={snapshot?.registeredApps.length ?? 0} />
+        <Metric label="Command templates" value={snapshot?.commandTemplates.length ?? 0} />
         <Metric label="Startup links" value={linkedStartupCount} />
         <Metric label="Enabled tools" value={snapshot?.tools.filter((tool) => tool.enabled && !tool.future).length ?? 0} />
         <Metric label="Recent failures" value={failedLogs.length} />
@@ -72,6 +76,11 @@ export function DiagnosticsScreen({ settings }: { settings: AppSettings }) {
           <p>Supported step validation: enabled</p>
           <p>Launch app step support: {snapshot?.tools.some((tool) => tool.name === "launch_app" && tool.enabled) ? "enabled" : "disabled"}</p>
           <p>Startup workflow linkage: {linkedStartupCount} linked project(s)</p>
+        </div>
+        <div className="section-divider">
+          <h3>Command runner</h3>
+          <p>Runner tool: {snapshot?.tools.some((tool) => tool.name === "run_command_template" && tool.enabled) ? "enabled" : "disabled"}</p>
+          <p>Last command run: {snapshot?.commandTemplates.find((item) => item.last_run_at)?.last_result_summary ?? "none"}</p>
         </div>
         <div className="section-divider">
           <h3>Recent blocked or failed actions</h3>
@@ -126,6 +135,39 @@ async function runDiagnosticsChecks(): Promise<string[]> {
   }
 
   checks.push("App launcher native command status: registered");
+  let commandTestId: string | null = null;
+  try {
+    const command = await createCommandTemplate({
+      name: "Klak diagnostics command",
+      command: "git status --short",
+      working_directory: "C:\\KlakDiagnostics",
+      command_type: "git_readonly",
+      risk_level: "low",
+      enabled: false
+    });
+    commandTestId = command.id;
+    checks.push("Command template repository health: passed");
+  } catch (error) {
+    checks.push(`Command template repository health: failed (${error instanceof Error ? error.message : String(error)})`);
+  } finally {
+    if (commandTestId) await deleteCommandTemplate(commandTestId);
+  }
+
+  try {
+    validateCommandSafety("rm -rf .");
+    checks.push("Blocked command safety test: failed");
+  } catch {
+    checks.push("Blocked command safety test: passed");
+  }
+
+  try {
+    validateCommandSafety("git status --short");
+    checks.push("Allowed command validation test: passed");
+  } catch {
+    checks.push("Allowed command validation test: failed");
+  }
+
+  checks.push("Command runner status: registered");
   return checks;
 }
 

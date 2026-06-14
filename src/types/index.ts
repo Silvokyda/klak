@@ -125,10 +125,32 @@ export interface RegisteredAppRecord {
   last_launched_at?: string | null;
 }
 
+export type CommandTemplateType = "npm" | "node" | "cargo" | "git_readonly" | "flutter" | "php_artisan" | "python" | "custom_safe";
+
+export interface CommandTemplateRecord {
+  id: string;
+  project_id?: string | null;
+  name: string;
+  description?: string | null;
+  command: string;
+  working_directory: string;
+  command_type: CommandTemplateType;
+  risk_level: Exclude<RiskLevel, "dangerous">;
+  enabled: boolean;
+  requires_confirmation: boolean;
+  timeout_seconds: number;
+  created_at: string;
+  updated_at: string;
+  last_run_at?: string | null;
+  run_count: number;
+  last_result_summary?: string | null;
+}
+
 export type WorkflowStepType =
   | "open_url"
   | "open_folder"
   | "launch_app"
+  | "run_command_template"
   | "create_note"
   | "copy_to_clipboard"
   | "search_memory"
@@ -171,6 +193,7 @@ export interface AIRequest {
   relevantProjects?: ProjectRecord[];
   relevantWorkflows?: WorkflowRecord[];
   relevantRegisteredApps?: RegisteredAppRecord[];
+  relevantCommandTemplates?: CommandTemplateRecord[];
   currentPermissionMode: PermissionMode;
   availableTools: ToolDefinition[];
   recentActionLogs: ActionLog[];

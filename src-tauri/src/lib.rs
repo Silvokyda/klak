@@ -61,6 +61,7 @@ CREATE TABLE IF NOT EXISTS allowed_folders (
 
 const SECRET_SERVICE: &str = "Klak";
 const WHISPER_TIMEOUT_SECONDS: u64 = 120;
+const COMMAND_OUTPUT_LIMIT: usize = 8_000;
 
 #[derive(serde::Deserialize)]
 struct SaveTempAudioInput {
@@ -91,6 +92,23 @@ struct LaunchRegisteredAppInput {
 #[derive(serde::Deserialize)]
 struct ValidateRegisteredAppPathInput {
     executable_path: String,
+}
+
+#[derive(serde::Deserialize)]
+struct RunCommandTemplateInput {
+    command_template_id: String,
+    command: String,
+    working_directory: String,
+    timeout_seconds: u64,
+}
+
+#[derive(serde::Serialize)]
+struct CommandRunOutput {
+    exit_code: Option<i32>,
+    stdout: String,
+    stderr: String,
+    duration_ms: u128,
+    timed_out: bool,
 }
 
 #[derive(serde::Serialize)]
@@ -250,6 +268,115 @@ fn validate_registered_app_path(
         blocked_shell,
         message: message.into(),
     })
+}
+
+#[tauri::command]
+fn run_command_template(input: RunCommandTemplateInput) -> Result<CommandRunOutput, String> {
+    if input.command_template_id.trim().is_empty() {
+        return Err("Command template id is required.".into());
+    }
+    let working_directory = PathBuf::from(input.working_directory.trim());
+    if !working_directory.is_dir() {
+        return Err("Command working directory does not exist or is not a directory.".into());
+    }
+
+    let parts = split_command(&input.command)?;
+    if parts.is_empty() {
+        return Err("Command is empty.".into());
+    }
+    let program = resolve_program(&parts[0]);
+    let args = &parts[1..];
+    let started = Instant::now();
+    let mut child = Command::new(program)
+        .args(args)
+        .current_dir(&working_directory)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("Unable to start command template: {error}"))?;
+
+    let timeout = Duration::from_secs(input.timeout_seconds.clamp(5, 600));
+    let (timed_out, status_code) = match child
+        .wait_timeout(timeout)
+        .map_err(|error| error.to_string())?
+    {
+        Some(status) => (false, status.code()),
+        None => {
+            let _ = child.kill();
+            let _ = child.wait();
+            (true, None)
+        }
+    };
+
+    let mut stdout = Vec::new();
+    let mut stderr = Vec::new();
+    if let Some(mut pipe) = child.stdout.take() {
+        pipe.read_to_end(&mut stdout)
+            .map_err(|error| format!("Unable to read command stdout: {error}"))?;
+    }
+    if let Some(mut pipe) = child.stderr.take() {
+        pipe.read_to_end(&mut stderr)
+            .map_err(|error| format!("Unable to read command stderr: {error}"))?;
+    }
+    Ok(CommandRunOutput {
+        exit_code: status_code,
+        stdout: truncate_for_command_output(&String::from_utf8_lossy(&stdout)),
+        stderr: truncate_for_command_output(&String::from_utf8_lossy(&stderr)),
+        duration_ms: started.elapsed().as_millis(),
+        timed_out,
+    })
+}
+
+fn resolve_program(program: &str) -> String {
+    if cfg!(windows) {
+        match program.to_lowercase().as_str() {
+            "npm" => "npm.cmd".into(),
+            "npx" => "npx.cmd".into(),
+            "cargo" => "cargo.exe".into(),
+            "git" => "git.exe".into(),
+            "node" => "node.exe".into(),
+            "flutter" => "flutter.bat".into(),
+            "php" => "php.exe".into(),
+            "python" => "python.exe".into(),
+            "py" => "py.exe".into(),
+            _ => program.into(),
+        }
+    } else {
+        program.into()
+    }
+}
+
+fn split_command(command: &str) -> Result<Vec<String>, String> {
+    let mut parts = Vec::new();
+    let mut current = String::new();
+    let mut in_quotes = false;
+    for ch in command.trim().chars() {
+        match ch {
+            '"' => in_quotes = !in_quotes,
+            ' ' | '\t' if !in_quotes => {
+                if !current.is_empty() {
+                    parts.push(current.clone());
+                    current.clear();
+                }
+            }
+            _ => current.push(ch),
+        }
+    }
+    if in_quotes {
+        return Err("Command contains an unmatched quote.".into());
+    }
+    if !current.is_empty() {
+        parts.push(current);
+    }
+    Ok(parts)
+}
+
+fn truncate_for_command_output(value: &str) -> String {
+    if value.len() > COMMAND_OUTPUT_LIMIT {
+        format!("{}...", &value[..COMMAND_OUTPUT_LIMIT])
+    } else {
+        value.to_string()
+    }
 }
 
 #[tauri::command]
@@ -487,6 +614,7 @@ pub fn run() {
             copy_text_to_clipboard,
             launch_registered_app,
             validate_registered_app_path,
+            run_command_template,
             save_temp_voice_audio,
             validate_whisper_setup,
             transcribe_audio_with_whisper

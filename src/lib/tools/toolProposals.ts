@@ -1,6 +1,7 @@
 import type { AppSettings, ToolActionInput } from "../../types";
 import { createActionPreview } from "../permissions/policy";
 import { getRegisteredAppById, validateExecutablePath } from "../apps/registeredAppsRepository";
+import { getCommandTemplateById, isLongRunningCommand, validateCommandSafety } from "../commands/commandTemplateRepository";
 import { listTools } from "./toolRegistry";
 import {
   assertAllowedFolder,
@@ -13,11 +14,14 @@ import {
 
 export async function buildActionPreviewForSuggestion(action: ToolActionInput, settings: AppSettings) {
   const tools = await listTools(settings.allToolsDisabled);
-  const tool = tools.find((item) => item.name === action.toolName);
+  let tool = tools.find((item) => item.name === action.toolName);
   if (!tool) return null;
 
   try {
     const input = await normalizeInput(action, settings);
+    if (action.toolName === "run_command_template" && typeof input.risk_level === "string") {
+      tool = { ...tool, riskLevel: input.risk_level as typeof tool.riskLevel };
+    }
     return createActionPreview(tool, input, settings);
   } catch (error) {
     return createActionPreview(
@@ -73,6 +77,24 @@ async function normalizeInput(action: ToolActionInput, settings: AppSettings): P
       app_name: app.name,
       executable_path: app.executable_path,
       app_type: app.app_type
+    };
+  }
+  if (action.toolName === "run_command_template") {
+    const commandTemplateId = String(action.input.command_template_id ?? "");
+    const template = await getCommandTemplateById(commandTemplateId);
+    if (!template) throw new Error("Klak can only run saved command templates.");
+    if (!template.enabled) throw new Error("This command template is disabled.");
+    if (isLongRunningCommand(template.command)) throw new Error("Long-running command templates are blocked until background process management exists.");
+    validateCommandSafety(template.command);
+    await assertPathInsideAllowedFolder(template.working_directory, settings);
+    return {
+      command_template_id: template.id,
+      command_name: template.name,
+      command: template.command,
+      working_directory: template.working_directory,
+      command_type: template.command_type,
+      risk_level: template.risk_level,
+      timeout_seconds: template.timeout_seconds
     };
   }
   return action.input;

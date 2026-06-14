@@ -37,9 +37,9 @@ npm run tauri build
 - Local data is stored in `sqlite:klak.db` through the Tauri SQL plugin when Klak runs as a desktop app.
 - During browser-only Vite development, repositories use `klak.insecure_dev_database.v1` in localStorage so UI work can continue without the Tauri runtime.
 - Database initialization is idempotent. `initDatabase()` creates tables and records migration version `1` in `schema_migrations`.
-- SQLite tables store memories, projects, workflows, registered apps, action logs, non-secret app settings, tool settings, and allowed folders.
+- SQLite tables store memories, projects, workflows, registered apps, command templates, action logs, non-secret app settings, tool settings, and allowed folders.
 - API keys are stored through `secretStore`. In native Tauri, Klak uses Windows-backed storage through the Rust `keyring` crate. In browser-only development, Klak falls back to `insecureDevSecretStore.ts` and warns: "Development storage is active. Do not use production keys."
-- Implemented safe tools: `open_url`, `open_folder`, `launch_app`, `create_note`, `copy_to_clipboard`, `search_memory`, and `create_memory`. They all go through permission checks, action previews, approval/denial, and audit logging.
+- Implemented safe tools: `open_url`, `open_folder`, `launch_app`, `run_command_template`, `create_note`, `copy_to_clipboard`, `search_memory`, and `create_memory`. They all go through permission checks, action previews, approval/denial, and audit logging.
 - The Apps screen lets users register approved `.exe` applications. Klak can launch only those registered apps, never arbitrary shell commands or arguments.
 - Dangerous tools are registered as disabled future extension points and blocked by the permission system.
 - Voice input is opt-in and push-to-talk only. Klak does not listen in the background and does not upload audio.
@@ -52,6 +52,21 @@ Register VS Code safely from Apps with its exact executable path, for example `C
 Workflows can be built with the step builder or the advanced JSON editor. Supported steps are `open_url`, `open_folder`, `launch_app`, `create_note`, `copy_to_clipboard`, `search_memory`, `create_memory`, and `manual_instruction`.
 
 To create a project startup workflow, register any apps first, create a workflow with safe steps, then link it from the Projects screen. Running a startup workflow still requires an explicit preview and user action; terminal commands remain manual instructions.
+
+## Command Templates
+
+Commands are saved templates, not arbitrary terminal access. The Commands screen lets users create finite templates such as `npm run build`, `cargo check`, `cargo fmt --check`, `git status --short`, `php artisan test`, `flutter analyze`, and `flutter test`.
+
+Rules:
+
+- commands must be saved before they can run,
+- working directories must be inside allowed folders,
+- shell chaining, pipes, redirection, background execution, destructive commands, credential-looking commands, and environment dumping are blocked,
+- command output is captured and truncated,
+- timeouts are enforced,
+- long-running commands such as `npm run tauri dev` are blocked until background process management exists.
+
+Workflow command steps select saved command templates only. Project command buttons also run through the same preview and approval path.
 
 ## Local Whisper CLI
 

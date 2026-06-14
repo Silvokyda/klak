@@ -63,6 +63,7 @@ In the native Tauri app, `secretStore` calls Rust commands backed by the `keyrin
 - `open_url` allows only `http` and `https`.
 - `open_folder` allows only folders already present in `allowed_folders`.
 - `launch_app` allows only registered, enabled `.exe` applications and uses a native direct spawn without shell interpolation.
+- `run_command_template` allows only saved finite command templates from allowed folders and uses preview, approval, timeout, and output truncation.
 - `create_note` writes only inside allowed folders and refuses to overwrite existing files.
 - `copy_to_clipboard` writes text only after user approval and never reads clipboard automatically.
 - `search_memory` searches local memory and should avoid logging raw sensitive queries.
@@ -83,6 +84,22 @@ The app launcher is not terminal execution. Klak stores approved applications in
 - Missing executable files are blocked by the native command.
 
 Terminal execution is intentionally not implemented yet because it needs a separate command policy, argument model, working-directory constraints, output capture, cancellation, and stronger review UX.
+
+## Command Template Rules
+
+Command templates are controlled local actions, not raw terminal access.
+
+- Raw command input at execution time is blocked.
+- Working directories must be inside allowed folders.
+- Shell chaining, pipes, redirection, and background execution are blocked.
+- Destructive commands such as `rm`, `del`, `rmdir`, `Remove-Item`, `format`, `shutdown`, `restart-computer`, `reg delete`, `net user`, `cipher`, and `diskpart` are blocked.
+- Environment dumping such as `set`, `printenv`, and `env` is blocked.
+- Credential-looking `curl` and `wget` commands are blocked.
+- Dangerous risk-level command templates are not supported.
+- Long-running dev commands are blocked until a background process manager exists.
+- Stdout and stderr are captured, truncated, and summarized; huge raw logs are not stored permanently.
+
+Windows commands such as `npm run build` may use a constrained executable shim like `npm.cmd`, but Klak still does not interpolate through a user-controlled shell command string.
 
 ## Voice Rules
 

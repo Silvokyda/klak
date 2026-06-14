@@ -2,8 +2,9 @@ import { ClipboardList, FilePlus, FolderOpen, Play, Plus, Trash2 } from "lucide-
 import { useEffect, useMemo, useState } from "react";
 import { ActionPreviewCard } from "../../components/ActionPreviewCard";
 import { ScreenHeader } from "../../components/ScreenHeader";
-import type { ActionPreview, AppSettings, ProjectRecord, ProjectStatus, ProjectType, WorkflowRecord } from "../../types";
+import type { ActionPreview, AppSettings, CommandTemplateRecord, ProjectRecord, ProjectStatus, ProjectType, WorkflowRecord } from "../../types";
 import { buildActionPreviewForSuggestion } from "../../lib/tools/toolProposals";
+import { createCommandTemplate, listCommandTemplates } from "../../lib/commands/commandTemplateRepository";
 import { createProject, deleteProject, listProjects, touchProject, updateProject } from "../../lib/projects/projectRepository";
 import { listWorkflows, previewWorkflow, runWorkflow } from "../../lib/workflows/workflowRepository";
 
@@ -13,6 +14,7 @@ const statuses: Array<ProjectStatus | "all"> = ["all", "active", "paused", "arch
 export function ProjectsScreen({ settings }: { settings: AppSettings }) {
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [workflows, setWorkflows] = useState<WorkflowRecord[]>([]);
+  const [commands, setCommands] = useState<CommandTemplateRecord[]>([]);
   const [status, setStatus] = useState<ProjectStatus | "all">("all");
   const [preview, setPreview] = useState<ActionPreview | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -34,12 +36,14 @@ export function ProjectsScreen({ settings }: { settings: AppSettings }) {
   const workflowName = useMemo(() => new Map(workflows.map((workflow) => [workflow.id, workflow.name])), [workflows]);
 
   async function refresh() {
-    const [nextProjects, nextWorkflows] = await Promise.all([
+    const [nextProjects, nextWorkflows, nextCommands] = await Promise.all([
       listProjects(status === "all" ? {} : { status }),
-      listWorkflows()
+      listWorkflows(),
+      listCommandTemplates()
     ]);
     setProjects(nextProjects);
     setWorkflows(nextWorkflows);
+    setCommands(nextCommands);
   }
 
   useEffect(() => {
@@ -115,6 +119,33 @@ export function ProjectsScreen({ settings }: { settings: AppSettings }) {
     }
   }
 
+  async function createBuildCommand(project: ProjectRecord) {
+    setMessage(null);
+    if (!project.repo_path) {
+      setMessage("Add a repository path before creating a project command.");
+      return;
+    }
+    try {
+      await createCommandTemplate({
+        project_id: project.id,
+        name: `${project.name} build`,
+        command: "npm run build",
+        working_directory: project.repo_path,
+        command_type: "npm",
+        risk_level: "medium",
+        description: `Build ${project.name}`
+      });
+      await refresh();
+    } catch (error) {
+      setMessage(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function runCommand(command: CommandTemplateRecord) {
+    const nextPreview = await buildActionPreviewForSuggestion({ toolName: "run_command_template", input: { command_template_id: command.id } }, settings);
+    if (nextPreview) setPreview(nextPreview);
+  }
+
   return (
     <div className="screen">
       <ScreenHeader title="Projects" subtitle="Project memory lives locally and can link an explicit startup workflow." />
@@ -169,6 +200,13 @@ export function ProjectsScreen({ settings }: { settings: AppSettings }) {
                 <input value={project.notes ?? ""} onChange={(event) => updateProject(project.id, { notes: event.target.value }).then(refresh)} placeholder="Notes" />
               </div>
               <small>Startup workflow: {project.startup_workflow_id ? workflowName.get(project.startup_workflow_id) ?? "linked workflow" : "none"}</small>
+              <div className="mini-list">
+                {(commands.filter((command) => command.project_id === project.id)).map((command) => (
+                  <button key={command.id} title={`Run ${command.name}`} disabled={!command.enabled} onClick={() => runCommand(command)}>
+                    {command.name}
+                  </button>
+                ))}
+              </div>
               <small>Updated {new Date(project.updated_at).toLocaleString()}</small>
             </div>
             <div className="row-actions">
@@ -177,6 +215,7 @@ export function ProjectsScreen({ settings }: { settings: AppSettings }) {
               <button title="Create project note" onClick={() => proposeProjectNote(project)}><FilePlus size={16} /></button>
               <button title="Preview startup workflow" onClick={() => previewStartup(project)}><ClipboardList size={16} /></button>
               <button title="Run startup workflow" onClick={() => runStartup(project)}><Play size={16} /></button>
+              <button title="Create build command" onClick={() => createBuildCommand(project)}><Plus size={16} /></button>
               <button title="Delete project" onClick={() => deleteProject(project.id).then(refresh)}><Trash2 size={16} /></button>
             </div>
           </article>

@@ -24,6 +24,7 @@ SQLite stores:
 - `projects`
 - `workflows`
 - `registered_apps`
+- `command_templates`
 - `action_logs`
 - `app_settings`
 - `tool_settings`
@@ -54,6 +55,8 @@ Structured project and workflow memory lives beside the general memory table. `s
 
 Registered apps live in `registered_apps` through `src/lib/apps/registeredAppsRepository.ts`. Records store a user-approved executable path, app type, allowed state, and launch timestamp.
 
+Command templates live in `command_templates` through `src/lib/commands/commandTemplateRepository.ts`. They store saved finite commands, project links, allowed working directories, risk, timeout, run count, and a short last-result summary.
+
 ## Tool System
 
 Tools are declared in `src/lib/tools/toolRegistry.ts`. Safe MVP tools are enabled where appropriate. Dangerous or future tools are present as disabled extension points:
@@ -71,14 +74,17 @@ Implemented safe tools:
 - `open_url`: validates and opens only `http` and `https` URLs.
 - `open_folder`: opens only folders in `allowed_folders`.
 - `launch_app`: launches only a locally registered and allowed `.exe`, with no shell and no arbitrary arguments.
+- `run_command_template`: runs only a saved, enabled command template from an allowed working directory, after safety validation and approval.
 - `create_note`: writes Markdown notes only inside allowed folders and refuses overwrites.
 - `copy_to_clipboard`: writes clipboard text only after approval and never reads clipboard automatically.
 - `search_memory`: searches local memory and logs the query summary.
 - `create_memory`: creates memory only through explicit request or approved preview.
 
-Workflows do not add new execution powers. They are ordered collections of the implemented safe tools plus manual instructions. The workflow builder supports add, remove, reorder, type selection, risk display, and an advanced JSON editor. Workflow preview uses the same normalization and permission checks as individual suggested actions, and blocked steps prevent the workflow from running.
+Workflows do not add new execution powers. They are ordered collections of the implemented safe tools plus manual instructions. The workflow builder supports add, remove, reorder, type selection, risk display, command-template selection, and an advanced JSON editor. Workflow preview uses the same normalization and permission checks as individual suggested actions, and blocked steps prevent the workflow from running.
 
 The native `launch_registered_app` command validates that the executable exists, is a `.exe`, is not a blocked shell or terminal executable, and starts it with `std::process::Command` without shell interpolation or custom arguments.
+
+The native `run_command_template` command validates the working directory, splits the saved command into executable and arguments, maps Windows shims such as `npm` to `npm.cmd`, runs without shell interpolation, captures stdout/stderr, truncates output, and enforces a timeout. It does not provide background process management.
 
 ## Secrets
 

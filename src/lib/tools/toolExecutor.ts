@@ -2,6 +2,7 @@ import { invoke } from "@tauri-apps/api/core";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import type { ActionPreview, AppSettings, MemoryType } from "../../types";
 import { touchRegisteredApp, validateExecutablePath } from "../apps/registeredAppsRepository";
+import { touchCommandTemplate, validateCommandSafety, type CommandRunResult } from "../commands/commandTemplateRepository";
 import { createMemory } from "../memory/memoryRepository";
 import { updateActionLog } from "../logs/actionLogRepository";
 import { nowIso } from "../utils";
@@ -51,6 +52,22 @@ export async function executeApprovedTool(preview: ActionPreview, settings: AppS
         input: { executable_path: String(preview.input.executable_path) }
       });
       await touchRegisteredApp(String(preview.input.registered_app_id ?? ""));
+    } else if (preview.tool.name === "run_command_template") {
+      validateCommandSafety(String(preview.input.command ?? ""));
+      await assertPathInsideAllowedFolder(String(preview.input.working_directory ?? ""), settings);
+      const result = await invoke<CommandRunResult>("run_command_template", {
+        input: {
+          command_template_id: String(preview.input.command_template_id ?? ""),
+          command: String(preview.input.command ?? ""),
+          working_directory: String(preview.input.working_directory ?? ""),
+          timeout_seconds: Number(preview.input.timeout_seconds ?? 120)
+        }
+      });
+      const summary = summarizeCommandResult(result);
+      if (result.timed_out || (result.exit_code ?? 1) !== 0) {
+        throw new Error(summary);
+      }
+      await touchCommandTemplate(String(preview.input.command_template_id ?? ""), summary);
     } else {
       throw new Error(`${preview.tool.label} is registered but execution is stubbed in this MVP.`);
     }
@@ -69,4 +86,10 @@ export async function executeApprovedTool(preview: ActionPreview, settings: AppS
     });
     throw error;
   }
+}
+
+function summarizeCommandResult(result: CommandRunResult): string {
+  const status = result.timed_out ? "timed out" : `exit ${result.exit_code ?? "unknown"}`;
+  const output = (result.stderr || result.stdout).trim().slice(0, 500);
+  return `Command ${status} in ${result.duration_ms}ms${output ? `: ${output}` : ""}`;
 }

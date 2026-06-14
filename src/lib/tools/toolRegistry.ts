@@ -59,6 +59,14 @@ export const initialTools: ToolDefinition[] = [
     future: false
   },
   {
+    name: "run_command_template",
+    label: "Run Command Template",
+    description: "Run a saved finite command template from an allowed folder.",
+    riskLevel: "high",
+    enabled: true,
+    future: false
+  },
+  {
     name: "browser_automation",
     label: "Browser Automation",
     description: "Future controlled browser workflows.",

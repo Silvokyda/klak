@@ -47,6 +47,7 @@ export async function resetLocalDatabase(): Promise<void> {
   await db.execute("DELETE FROM projects");
   await db.execute("DELETE FROM workflows");
   await db.execute("DELETE FROM registered_apps");
+  await db.execute("DELETE FROM command_templates");
 }
 
 async function createAdapter(): Promise<DbAdapter> {
@@ -80,6 +81,7 @@ function createInsecureDevDatabase(): DbAdapter {
     projects: Row[];
     workflows: Row[];
     registered_apps: Row[];
+    command_templates: Row[];
     schema_migrations: Row[];
   };
 
@@ -92,6 +94,7 @@ function createInsecureDevDatabase(): DbAdapter {
     projects: [],
     workflows: [],
     registered_apps: [],
+    command_templates: [],
     schema_migrations: []
   });
 
@@ -122,6 +125,14 @@ function createInsecureDevDatabase(): DbAdapter {
       else if (normalized.startsWith("UPDATE REGISTERED_APPS SET LAST_LAUNCHED_AT")) updateById(state.registered_apps, String(bindValues[1]), { last_launched_at: bindValues[0] });
       else if (normalized.startsWith("UPDATE REGISTERED_APPS")) updateById(state.registered_apps, String(bindValues[7]), registeredAppPatch(bindValues));
       else if (normalized.startsWith("DELETE FROM REGISTERED_APPS")) removeById(state.registered_apps, String(bindValues[0]));
+      else if (normalized.startsWith("INSERT INTO COMMAND_TEMPLATES")) upsert(state.command_templates, commandTemplateRow(bindValues));
+      else if (normalized.startsWith("UPDATE COMMAND_TEMPLATES SET LAST_RUN_AT")) {
+        const id = String(bindValues[2]);
+        const template = state.command_templates.find((row) => row.id === id);
+        updateById(state.command_templates, id, { last_run_at: bindValues[0], last_result_summary: bindValues[1], run_count: Number(template?.run_count ?? 0) + 1 });
+      }
+      else if (normalized.startsWith("UPDATE COMMAND_TEMPLATES")) updateById(state.command_templates, String(bindValues[11]), commandTemplatePatch(bindValues));
+      else if (normalized.startsWith("DELETE FROM COMMAND_TEMPLATES")) removeById(state.command_templates, String(bindValues[0]));
       else if (normalized.startsWith("INSERT INTO WORKFLOWS")) upsert(state.workflows, workflowRow(bindValues));
       else if (normalized.startsWith("UPDATE WORKFLOWS SET LAST_RUN_AT")) {
         const id = String(bindValues[1]);
@@ -149,6 +160,7 @@ function createInsecureDevDatabase(): DbAdapter {
       else if (normalized.includes("FROM PROJECTS")) rows = selectProjects(state.projects, normalized, bindValues);
       else if (normalized.includes("FROM WORKFLOWS")) rows = selectWorkflows(state.workflows, normalized, bindValues);
       else if (normalized.includes("FROM REGISTERED_APPS")) rows = selectRegisteredApps(state.registered_apps, normalized, bindValues);
+      else if (normalized.includes("FROM COMMAND_TEMPLATES")) rows = selectCommandTemplates(state.command_templates, normalized, bindValues);
       return rows as T[];
     }
   };
@@ -226,6 +238,16 @@ function registeredAppPatch(values: BindValue[]): Row {
   return { name, executable_path, app_type, description, allowed, updated_at, last_launched_at };
 }
 
+function commandTemplateRow(values: BindValue[]): Row {
+  const [id, project_id, name, description, command, working_directory, command_type, risk_level, enabled, requires_confirmation, timeout_seconds, created_at, updated_at, last_run_at, run_count, last_result_summary] = values;
+  return { id, project_id, name, description, command, working_directory, command_type, risk_level, enabled, requires_confirmation, timeout_seconds, created_at, updated_at, last_run_at, run_count, last_result_summary };
+}
+
+function commandTemplatePatch(values: BindValue[]): Row {
+  const [project_id, name, description, command, working_directory, command_type, risk_level, enabled, requires_confirmation, timeout_seconds, updated_at] = values;
+  return { project_id, name, description, command, working_directory, command_type, risk_level, enabled, requires_confirmation, timeout_seconds, updated_at };
+}
+
 function workflowRow(values: BindValue[]): Row {
   const [id, project_id, name, description, trigger_phrase, steps_json, risk_level, requires_confirmation, created_at, updated_at, last_run_at, run_count] = values;
   return { id, project_id, name, description, trigger_phrase, steps_json, risk_level, requires_confirmation, created_at, updated_at, last_run_at, run_count };
@@ -291,6 +313,17 @@ function selectRegisteredApps(rows: Row[], sql: string, values: BindValue[]): Ro
     const query = String(values[0] ?? "").replace(/%/g, "").toLowerCase();
     result = result.filter((row) => `${row.name} ${row.executable_path} ${row.app_type} ${row.description}`.toLowerCase().includes(query));
   } else if (sql.includes("ALLOWED =")) result = result.filter((row) => row.allowed === values[0]);
+  return result.sort((a, b) => Date.parse(String(b.updated_at)) - Date.parse(String(a.updated_at)));
+}
+
+function selectCommandTemplates(rows: Row[], sql: string, values: BindValue[]): Row[] {
+  let result = [...rows];
+  if (sql.includes("WHERE ID =")) result = result.filter((row) => row.id === values[0]);
+  else if (sql.includes("LIKE")) {
+    const query = String(values[0] ?? "").replace(/%/g, "").toLowerCase();
+    result = result.filter((row) => `${row.name} ${row.description} ${row.command} ${row.working_directory} ${row.command_type}`.toLowerCase().includes(query));
+  } else if (sql.includes("PROJECT_ID =")) result = result.filter((row) => row.project_id === values[0]);
+  else if (sql.includes("ENABLED =")) result = result.filter((row) => row.enabled === values[0]);
   return result.sort((a, b) => Date.parse(String(b.updated_at)) - Date.parse(String(a.updated_at)));
 }
 

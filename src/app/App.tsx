@@ -1,7 +1,8 @@
-import { Activity, Bot, Briefcase, Database, GitBranch, History, Rocket, Settings, ShieldCheck, Wrench } from "lucide-react";
+import { Activity, Bot, Briefcase, Database, GitBranch, History, Rocket, Settings, ShieldCheck, TerminalSquare, Wrench } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import type { AppSettings } from "../types";
 import { AppsScreen } from "../features/apps/AppsScreen";
+import { CommandsScreen } from "../features/commands/CommandsScreen";
 import { AssistantScreen } from "../features/chat/AssistantScreen";
 import { DiagnosticsScreen } from "../features/diagnostics/DiagnosticsScreen";
 import { LogsScreen } from "../features/logs/LogsScreen";
@@ -15,7 +16,7 @@ import { defaultSettings, loadSettings, saveSettings } from "../lib/storage/sett
 import { labelPermissionMode } from "../lib/utils";
 import { initDatabase } from "../lib/db/database";
 
-type View = "assistant" | "memory" | "projects" | "workflows" | "apps" | "tools" | "logs" | "diagnostics" | "settings";
+type View = "assistant" | "memory" | "projects" | "workflows" | "apps" | "commands" | "tools" | "logs" | "diagnostics" | "settings";
 
 export function App() {
   const [settings, setSettings] = useState<AppSettings>(defaultSettings);
@@ -41,6 +42,7 @@ export function App() {
       { id: "projects" as const, label: "Projects", icon: Briefcase },
       { id: "workflows" as const, label: "Workflows", icon: GitBranch },
       { id: "apps" as const, label: "Apps", icon: Rocket },
+      { id: "commands" as const, label: "Commands", icon: TerminalSquare },
       { id: "tools" as const, label: "Tools", icon: Wrench },
       { id: "logs" as const, label: "Logs", icon: History },
       { id: "diagnostics" as const, label: "Diagnostics", icon: Activity },
@@ -88,6 +90,7 @@ export function App() {
         {view === "projects" && <ProjectsScreen settings={settings} />}
         {view === "workflows" && <WorkflowsScreen settings={settings} />}
         {view === "apps" && <AppsScreen settings={settings} />}
+        {view === "commands" && <CommandsScreen settings={settings} />}
         {view === "tools" && <ToolsScreen settings={settings} onSettingsChange={updateSettings} />}
         {view === "logs" && <LogsScreen />}
         {view === "diagnostics" && <DiagnosticsScreen settings={settings} />}

@@ -5,15 +5,17 @@ import { listTools } from "../tools/toolRegistry";
 import { OpenAICompatibleProvider } from "./openAiCompatibleProvider";
 import { localContextCollector } from "../context/localContext";
 import { searchRegisteredApps } from "../apps/registeredAppsRepository";
+import { isLongRunningCommand, searchCommandTemplates } from "../commands/commandTemplateRepository";
 import { searchProjects } from "../projects/projectRepository";
 import { searchWorkflows } from "../workflows/workflowRepository";
 
 export async function sendChatMessage(userMessage: string, settings: AppSettings): Promise<AIResponse> {
-  const [relevantMemories, relevantProjects, relevantWorkflows, relevantRegisteredApps, availableTools, recentActionLogs, localContext] = await Promise.all([
+  const [relevantMemories, relevantProjects, relevantWorkflows, relevantRegisteredApps, relevantCommandTemplates, availableTools, recentActionLogs, localContext] = await Promise.all([
     searchMemories(userMessage),
     searchProjects(userMessage),
     searchWorkflows(userMessage),
     searchRegisteredApps(userMessage),
+    searchCommandTemplates(userMessage),
     listTools(settings.allToolsDisabled),
     listActionLogs(),
     settings.localContextEnabled ? localContextCollector.collect() : Promise.resolve({})
@@ -23,6 +25,39 @@ export async function sendChatMessage(userMessage: string, settings: AppSettings
     return {
       message: "I can remember that as a registered app, but I need the exact .exe path first. Add it in Apps so Klak can validate it and require approval before launch."
     };
+  }
+
+  if (/\b(save|remember)\b.+\bas (?:a )?command\b/i.test(userMessage)) {
+    return {
+      message: "I can save that as a command template, but I need the project and an allowed working directory first. Add it in Commands so Klak can validate it before any run."
+    };
+  }
+
+  const commandListProject = userMessage.match(/\bwhat commands do you know for\s+(.+?)\??$/i)?.[1]?.trim().toLowerCase();
+  if (commandListProject) {
+    const project = relevantProjects.find((item) => item.name.toLowerCase().includes(commandListProject));
+    const commands = project ? relevantCommandTemplates.filter((item) => item.project_id === project.id) : relevantCommandTemplates;
+    return {
+      message: commands.length
+        ? `I know these saved command templates: ${commands.map((item) => item.name).join(", ")}.`
+        : "I did not find saved command templates for that project."
+    };
+  }
+
+  const runCommandRequest = userMessage.match(/\b(?:run|start)\s+(.+?)\.?$/i)?.[1]?.trim().toLowerCase();
+  if (runCommandRequest) {
+    const command = relevantCommandTemplates.find((item) => item.enabled && item.name.toLowerCase().includes(runCommandRequest));
+    if (command) {
+      if (isLongRunningCommand(command.command)) {
+        return {
+          message: "That saved command looks long-running. Background process management is not implemented yet, so run it manually or add it as a manual workflow instruction for now."
+        };
+      }
+      return {
+        message: `I found the saved command template "${command.name}". Review the action preview before it runs.`,
+        suggestedAction: { toolName: "run_command_template", input: { command_template_id: command.id } }
+      };
+    }
   }
 
   const launchRequest = userMessage.match(/\b(?:open|launch|start)\s+(.+?)\.?$/i);
@@ -128,6 +163,7 @@ export async function sendChatMessage(userMessage: string, settings: AppSettings
     relevantProjects: relevantProjects.slice(0, 5),
     relevantWorkflows: relevantWorkflows.slice(0, 5),
     relevantRegisteredApps: relevantRegisteredApps.slice(0, 5),
+    relevantCommandTemplates: relevantCommandTemplates.slice(0, 5),
     currentPermissionMode: settings.permissionMode,
     availableTools,
     recentActionLogs: recentActionLogs.slice(0, 10),

@@ -17,6 +17,7 @@
 - Workflow memory screen, safe preview, and safe execution
 - Diagnostics screen
 - Controlled registered app launcher
+- Controlled command templates
 - Safer workflow builder UI
 - Project startup workflow links
 - Improved memory search

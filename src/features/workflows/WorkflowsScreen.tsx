@@ -1,13 +1,14 @@
 import { ArrowDown, ArrowUp, ClipboardList, Play, Plus, ShieldCheck, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { ScreenHeader } from "../../components/ScreenHeader";
-import type { AllowedFolder, AppSettings, ProjectRecord, RegisteredAppRecord, WorkflowRecord, WorkflowStep, WorkflowStepType } from "../../types";
+import type { AllowedFolder, AppSettings, CommandTemplateRecord, ProjectRecord, RegisteredAppRecord, WorkflowRecord, WorkflowStep, WorkflowStepType } from "../../types";
 import { listRegisteredApps } from "../../lib/apps/registeredAppsRepository";
+import { listCommandTemplates } from "../../lib/commands/commandTemplateRepository";
 import { listProjects } from "../../lib/projects/projectRepository";
 import { listAllowedFolders } from "../../lib/storage/allowedFoldersRepository";
 import { createWorkflow, deleteWorkflow, listWorkflows, parseWorkflowSteps, previewWorkflow, runWorkflow, updateWorkflow, validateWorkflowSteps } from "../../lib/workflows/workflowRepository";
 
-const supportedStepTypes: WorkflowStepType[] = ["open_url", "open_folder", "launch_app", "create_note", "copy_to_clipboard", "search_memory", "create_memory", "manual_instruction"];
+const supportedStepTypes: WorkflowStepType[] = ["open_url", "open_folder", "launch_app", "run_command_template", "create_note", "copy_to_clipboard", "search_memory", "create_memory", "manual_instruction"];
 
 const templateSteps: WorkflowStep[] = [
   { type: "search_memory", label: "Search related memory", input: { query: "project status" } },
@@ -18,6 +19,7 @@ export function WorkflowsScreen({ settings }: { settings: AppSettings }) {
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [folders, setFolders] = useState<AllowedFolder[]>([]);
   const [apps, setApps] = useState<RegisteredAppRecord[]>([]);
+  const [commands, setCommands] = useState<CommandTemplateRecord[]>([]);
   const [workflows, setWorkflows] = useState<WorkflowRecord[]>([]);
   const [selectedProject, setSelectedProject] = useState("all");
   const [draft, setDraft] = useState({
@@ -36,15 +38,17 @@ export function WorkflowsScreen({ settings }: { settings: AppSettings }) {
 
   async function refresh() {
     const projectFilter = selectedProject === "all" ? {} : { project_id: selectedProject };
-    const [nextProjects, nextFolders, nextApps, nextWorkflows] = await Promise.all([
+    const [nextProjects, nextFolders, nextApps, nextCommands, nextWorkflows] = await Promise.all([
       listProjects(),
       listAllowedFolders(),
       listRegisteredApps({ allowed: true }),
+      listCommandTemplates({ enabled: true }),
       listWorkflows(projectFilter)
     ]);
     setProjects(nextProjects);
     setFolders(nextFolders);
     setApps(nextApps);
+    setCommands(nextCommands);
     setWorkflows(nextWorkflows);
   }
 
@@ -178,7 +182,7 @@ export function WorkflowsScreen({ settings }: { settings: AppSettings }) {
                 <input value={step.label ?? ""} onChange={(event) => updateStep(index, { label: event.target.value })} placeholder="Label" />
                 <span className={`risk risk-${stepRisk(step.type)}`}>{stepRisk(step.type)}</span>
               </div>
-              <StepFields step={step} index={index} folders={folders} apps={apps} onInput={updateStepInput} />
+              <StepFields step={step} index={index} folders={folders} apps={apps} commands={commands} onInput={updateStepInput} />
               <div className="row">
                 <button title="Move step up" disabled={index === 0} onClick={() => moveStep(index, -1)}><ArrowUp size={16} /></button>
                 <button title="Move step down" disabled={index === draft.steps.length - 1} onClick={() => moveStep(index, 1)}><ArrowDown size={16} /></button>
@@ -229,11 +233,12 @@ export function WorkflowsScreen({ settings }: { settings: AppSettings }) {
   );
 }
 
-function StepFields({ step, index, folders, apps, onInput }: {
+function StepFields({ step, index, folders, apps, commands, onInput }: {
   step: WorkflowStep;
   index: number;
   folders: AllowedFolder[];
   apps: RegisteredAppRecord[];
+  commands: CommandTemplateRecord[];
   onInput: (index: number, input: Record<string, unknown>) => void;
 }) {
   if (step.type === "open_url") return <input value={String(step.input.url ?? "")} onChange={(event) => onInput(index, { url: event.target.value })} placeholder="https://example.com" />;
@@ -243,6 +248,14 @@ function StepFields({ step, index, folders, apps, onInput }: {
       <select value={String(step.input.registered_app_id ?? "")} onChange={(event) => onInput(index, { registered_app_id: event.target.value })}>
         <option value="">Select registered app</option>
         {apps.map((app) => <option key={app.id} value={app.id}>{app.name}</option>)}
+      </select>
+    );
+  }
+  if (step.type === "run_command_template") {
+    return (
+      <select value={String(step.input.command_template_id ?? "")} onChange={(event) => onInput(index, { command_template_id: event.target.value })}>
+        <option value="">Select command template</option>
+        {commands.map((command) => <option key={command.id} value={command.id}>{command.name}</option>)}
       </select>
     );
   }
@@ -284,6 +297,7 @@ function defaultStep(type: WorkflowStepType): WorkflowStep {
   if (type === "open_url") return { type, label: "", input: { url: "" } };
   if (type === "open_folder") return { type, label: "", input: { path: "" } };
   if (type === "launch_app") return { type, label: "", input: { registered_app_id: "" } };
+  if (type === "run_command_template") return { type, label: "", input: { command_template_id: "" } };
   if (type === "create_note") return { type, label: "", input: { destinationFolder: "", title: "", content: "" } };
   if (type === "copy_to_clipboard") return { type, label: "", input: { text: "" } };
   if (type === "search_memory") return { type, label: "", input: { query: "" } };
@@ -293,11 +307,13 @@ function defaultStep(type: WorkflowStepType): WorkflowStep {
 
 function describeStep(step: WorkflowStep, apps: RegisteredAppRecord[]): string {
   if (step.type === "launch_app") return `launch ${apps.find((app) => app.id === step.input.registered_app_id)?.name ?? "registered app"}`;
+  if (step.type === "run_command_template") return "run saved command template";
   if (step.type === "manual_instruction") return String(step.input.text ?? "manual instruction");
   return `${step.type.replace(/_/g, " ")} ${JSON.stringify(step.input)}`;
 }
 
 function stepRisk(type: WorkflowStepType) {
+  if (type === "run_command_template") return "high";
   return ["open_folder", "launch_app", "create_note", "copy_to_clipboard", "create_memory"].includes(type) ? "medium" : "low";
 }
 

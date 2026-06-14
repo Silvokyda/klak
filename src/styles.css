@@ -311,7 +311,7 @@ textarea {
   gap: 8px;
 }
 
-.project-row, .workflow-row, .app-row {
+.project-row, .workflow-row, .app-row, .command-row {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 
@@ -390,6 +390,17 @@ textarea {
   display: grid;
   gap: 10px;
   background: #f8fafb;
+}
+
+.preset-row, .mini-list {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.preset-row button, .mini-list button {
+  font-size: 13px;
+  padding: 7px 9px;
 }
 
 .code-input {

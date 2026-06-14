@@ -74,6 +74,25 @@ CREATE TABLE IF NOT EXISTS registered_apps (
   last_launched_at TEXT
 );
 
+CREATE TABLE IF NOT EXISTS command_templates (
+  id TEXT PRIMARY KEY,
+  project_id TEXT,
+  name TEXT NOT NULL,
+  description TEXT,
+  command TEXT NOT NULL,
+  working_directory TEXT NOT NULL,
+  command_type TEXT NOT NULL,
+  risk_level TEXT NOT NULL,
+  enabled INTEGER DEFAULT 1,
+  requires_confirmation INTEGER DEFAULT 1,
+  timeout_seconds INTEGER DEFAULT 120,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_run_at TEXT,
+  run_count INTEGER DEFAULT 0,
+  last_result_summary TEXT
+);
+
 CREATE TABLE IF NOT EXISTS workflows (
   id TEXT PRIMARY KEY,
   project_id TEXT,
