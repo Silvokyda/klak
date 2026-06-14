@@ -60,16 +60,16 @@ export const initialTools: ToolDefinition[] = [
   },
   {
     name: "run_command_template",
-    label: "Run Command Template",
-    description: "Run a saved finite command template from an allowed folder.",
+    label: "Run Saved Action",
+    description: "Run an approved saved action from an allowed folder.",
     riskLevel: "high",
     enabled: true,
     future: false
   },
   {
     name: "start_background_process",
-    label: "Start Background Process",
-    description: "Start an approved long-running command template as a Klak-managed process.",
+    label: "Start Running Activity",
+    description: "Start an approved long-running saved action as a Klak-managed activity.",
     riskLevel: "high",
     enabled: true,
     future: false

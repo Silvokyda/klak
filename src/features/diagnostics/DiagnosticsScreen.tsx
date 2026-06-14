@@ -50,16 +50,16 @@ export function DiagnosticsScreen({ settings }: { settings: AppSettings }) {
   return (
     <div className="screen">
       <ScreenHeader
-        title="Diagnostics"
-        subtitle="Local health checks for memory, apps, workflows, permissions, and recent action failures."
+        title="Health Check"
+        subtitle="Local health checks for memory, apps, routines, permissions, and recent action failures."
         actions={<button onClick={refresh} title="Refresh diagnostics"><RefreshCw size={16} /> Refresh</button>}
       />
       <section className="metric-grid">
         <Metric label="Projects" value={snapshot?.projects.length ?? 0} />
-        <Metric label="Workflows" value={snapshot?.workflows.length ?? 0} />
+        <Metric label="Routines" value={snapshot?.workflows.length ?? 0} />
         <Metric label="Registered apps" value={snapshot?.registeredApps.length ?? 0} />
-        <Metric label="Command templates" value={snapshot?.commandTemplates.length ?? 0} />
-        <Metric label="Running processes" value={runningProcessCount} />
+        <Metric label="Saved actions" value={snapshot?.commandTemplates.length ?? 0} />
+        <Metric label="Running activities" value={runningProcessCount} />
         <Metric label="Startup links" value={linkedStartupCount} />
         <Metric label="Enabled tools" value={snapshot?.tools.filter((tool) => tool.enabled && !tool.future).length ?? 0} />
         <Metric label="Recent failures" value={failedLogs.length} />
@@ -77,21 +77,21 @@ export function DiagnosticsScreen({ settings }: { settings: AppSettings }) {
           {snapshot?.checks.map((check) => <p key={check}>{check}</p>)}
         </div>
         <div className="section-divider">
-          <h3>Workflow builder</h3>
+          <h3>Routine builder</h3>
           <p>Supported step validation: enabled</p>
           <p>Launch app step support: {snapshot?.tools.some((tool) => tool.name === "launch_app" && tool.enabled) ? "enabled" : "disabled"}</p>
           <p>Startup workflow linkage: {linkedStartupCount} linked project(s)</p>
         </div>
         <div className="section-divider">
-          <h3>Command runner</h3>
-          <p>Runner tool: {snapshot?.tools.some((tool) => tool.name === "run_command_template" && tool.enabled) ? "enabled" : "disabled"}</p>
+          <h3>Saved action runner</h3>
+          <p>Runner capability: {snapshot?.tools.some((tool) => tool.name === "run_command_template" && tool.enabled) ? "enabled" : "disabled"}</p>
           <p>Last command run: {snapshot?.commandTemplates.find((item) => item.last_run_at)?.last_result_summary ?? "none"}</p>
         </div>
         <div className="section-divider">
-          <h3>Process manager</h3>
-          <p>Manager tool: {snapshot?.tools.some((tool) => tool.name === "start_background_process" && tool.enabled) ? "enabled" : "disabled"}</p>
+          <h3>Running activities</h3>
+          <p>Activity manager: {snapshot?.tools.some((tool) => tool.name === "start_background_process" && tool.enabled) ? "enabled" : "disabled"}</p>
           <p>Output logs: system temp directory under klak/process-logs</p>
-          <p>Stale process records: {snapshot?.backgroundProcesses.filter((process) => process.status === "starting").length ?? 0}</p>
+          <p>Stale activity records: {snapshot?.backgroundProcesses.filter((process) => process.status === "stale").length ?? 0}</p>
         </div>
         <div className="section-divider">
           <h3>Recent blocked or failed actions</h3>
@@ -180,13 +180,21 @@ async function runDiagnosticsChecks(): Promise<string[]> {
 
   checks.push("Command runner status: registered");
   try {
-    const running = await listRunningBackgroundProcesses();
-    const hasDuplicate = running.some((process, index) => running.findIndex((item) => item.command_template_id === process.command_template_id) !== index);
-    checks.push(hasDuplicate ? "Duplicate process blocking test: needs attention" : "Duplicate process blocking test: passed");
+    const status = await invoke<{ status: string }>("get_background_process_status", {
+      input: { process_id: "diagnostic-process-id" }
+    });
+    checks.push(status.status === "stale" ? "Activity manager native status check: passed" : "Activity manager native status check: needs attention");
   } catch {
-    checks.push("Duplicate process blocking test: failed");
+    checks.push("Activity manager native status check: failed");
   }
-  checks.push("Background process table validation: passed");
+  try {
+    const running = await listRunningBackgroundProcesses();
+    const hasDuplicate = running.some((process, index) => running.findIndex((item) => item.command_template_id === process.command_template_id && item.working_directory === process.working_directory) !== index);
+    checks.push(hasDuplicate ? "Duplicate activity blocking test: needs attention" : "Duplicate activity blocking test: passed");
+  } catch {
+    checks.push("Duplicate activity blocking test: failed");
+  }
+  checks.push("Running activity table validation: passed");
   return checks;
 }
 

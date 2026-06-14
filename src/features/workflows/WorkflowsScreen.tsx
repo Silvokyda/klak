@@ -147,7 +147,7 @@ export function WorkflowsScreen({ settings }: { settings: AppSettings }) {
 
   return (
     <div className="screen">
-      <ScreenHeader title="Workflows" subtitle="Build repeatable local workflows from supported safe steps only." />
+      <ScreenHeader title="Routines" subtitle="Build repeatable local routines from supported safe steps only." />
       <section className="toolbar">
         <select value={selectedProject} onChange={(event) => setSelectedProject(event.target.value)}>
           <option value="all">all projects</option>
@@ -254,7 +254,7 @@ function StepFields({ step, index, folders, apps, commands, onInput }: {
   if (step.type === "run_command_template") {
     return (
       <select value={String(step.input.command_template_id ?? "")} onChange={(event) => onInput(index, { command_template_id: event.target.value })}>
-        <option value="">Select command template</option>
+        <option value="">Select saved action</option>
         {commands.map((command) => <option key={command.id} value={command.id}>{command.name}</option>)}
       </select>
     );
@@ -262,7 +262,7 @@ function StepFields({ step, index, folders, apps, commands, onInput }: {
   if (step.type === "start_background_process") {
     return (
       <select value={String(step.input.command_template_id ?? "")} onChange={(event) => onInput(index, { command_template_id: event.target.value })}>
-        <option value="">Select long-running command template</option>
+        <option value="">Select long-running saved action</option>
         {commands.filter((command) => command.is_long_running && command.allow_background_run).map((command) => <option key={command.id} value={command.id}>{command.name}</option>)}
       </select>
     );
@@ -316,8 +316,8 @@ function defaultStep(type: WorkflowStepType): WorkflowStep {
 
 function describeStep(step: WorkflowStep, apps: RegisteredAppRecord[]): string {
   if (step.type === "launch_app") return `launch ${apps.find((app) => app.id === step.input.registered_app_id)?.name ?? "registered app"}`;
-  if (step.type === "run_command_template") return "run saved command template";
-  if (step.type === "start_background_process") return "start saved background process";
+  if (step.type === "run_command_template") return "run saved action";
+  if (step.type === "start_background_process") return "start running activity";
   if (step.type === "manual_instruction") return String(step.input.text ?? "manual instruction");
   return `${step.type.replace(/_/g, " ")} ${JSON.stringify(step.input)}`;
 }

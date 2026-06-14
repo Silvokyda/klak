@@ -3,7 +3,7 @@ import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import type { ActionPreview, AppSettings, MemoryType } from "../../types";
 import { touchRegisteredApp, validateExecutablePath } from "../apps/registeredAppsRepository";
 import { touchCommandTemplate, validateCommandSafety, type CommandRunResult } from "../commands/commandTemplateRepository";
-import { createBackgroundProcess, updateBackgroundProcess } from "../processes/backgroundProcessRepository";
+import { createBackgroundProcess, listRunningBackgroundProcesses, updateBackgroundProcess } from "../processes/backgroundProcessRepository";
 import { createMemory } from "../memory/memoryRepository";
 import { updateActionLog } from "../logs/actionLogRepository";
 import { nowIso } from "../utils";
@@ -72,6 +72,10 @@ export async function executeApprovedTool(preview: ActionPreview, settings: AppS
     } else if (preview.tool.name === "start_background_process") {
       validateCommandSafety(String(preview.input.command ?? ""));
       await assertPathInsideAllowedFolder(String(preview.input.working_directory ?? ""), settings);
+      const running = await listRunningBackgroundProcesses();
+      if (running.some((process) => process.command_template_id === String(preview.input.command_template_id ?? "") && process.working_directory === String(preview.input.working_directory ?? ""))) {
+        throw new Error("This saved action is already running for that folder.");
+      }
       const process = await createBackgroundProcess({
         command_template_id: String(preview.input.command_template_id ?? ""),
         project_id: preview.input.project_id ? String(preview.input.project_id) : null,
@@ -95,9 +99,9 @@ export async function executeApprovedTool(preview: ActionPreview, settings: AppS
         status: "running",
         process_pid: result.pid,
         output_log_path: result.output_log_path,
-        last_output_preview: "Started background process."
+        last_output_preview: "Started running activity."
       });
-      await touchCommandTemplate(process.command_template_id, `Started background process pid ${result.pid}`);
+      await touchCommandTemplate(process.command_template_id, `Started running activity pid ${result.pid}`);
     } else {
       throw new Error(`${preview.tool.label} is registered but execution is stubbed in this MVP.`);
     }

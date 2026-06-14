@@ -37,7 +37,7 @@ export function ActionPreviewCard({ preview, settings, onDone }: Props) {
       <div>
         <span className={`risk risk-${preview.riskLevel}`}>{preview.riskLevel}</span>
         <h3>{preview.message}</h3>
-        <p>Tool: {preview.tool.label}</p>
+        <p>Capability: {preview.tool.label}</p>
         <p>Data: {preview.inputSummary || "No input data"}</p>
       </div>
       <div className="row">

@@ -97,7 +97,7 @@ Command templates are controlled local actions, not raw terminal access.
 - Environment dumping such as `set`, `printenv`, and `env` is blocked.
 - Credential-looking `curl` and `wget` commands are blocked.
 - Dangerous risk-level command templates are not supported.
-- Long-running dev commands are blocked until a background process manager exists.
+- Long-running dev commands must be explicitly marked for background runs before they can start as managed running activities.
 - Stdout and stderr are captured, truncated, and summarized; huge raw logs are not stored permanently.
 
 Windows commands such as `npm run build` may use a constrained executable shim like `npm.cmd`, but Klak still does not interpolate through a user-controlled shell command string.

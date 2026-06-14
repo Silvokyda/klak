@@ -122,7 +122,7 @@ export function CommandsScreen({ settings }: { settings: AppSettings }) {
 
   return (
     <div className="screen">
-      <ScreenHeader title="Commands" subtitle="Save finite command templates before Klak can preview and run them." />
+      <ScreenHeader title="Saved Actions" subtitle="Save approved local actions for routines, workspaces, and advanced tools before Klak can run them." />
       <section className="toolbar search-toolbar">
         <input
           value={query}
@@ -130,7 +130,7 @@ export function CommandsScreen({ settings }: { settings: AppSettings }) {
             setQuery(event.target.value);
             void refresh(event.target.value);
           }}
-          placeholder="Search command templates"
+          placeholder="Search saved actions"
         />
       </section>
       <section className="editor">
@@ -142,7 +142,7 @@ export function CommandsScreen({ settings }: { settings: AppSettings }) {
           ))}
         </div>
         <div className="form-grid">
-          <input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="Template name" />
+          <input value={draft.name} onChange={(event) => setDraft({ ...draft, name: event.target.value })} placeholder="Saved action name" />
           <select value={draft.project_id} onChange={(event) => setDraft({ ...draft, project_id: event.target.value })}>
             <option value="">No project</option>
             {projects.map((project) => <option key={project.id} value={project.id}>{project.name}</option>)}
@@ -187,7 +187,7 @@ export function CommandsScreen({ settings }: { settings: AppSettings }) {
           <input type="number" min={0} max={86400} value={draft.max_runtime_seconds} onChange={(event) => setDraft({ ...draft, max_runtime_seconds: Number(event.target.value) })} placeholder="Max runtime seconds" />
         </div>
         <textarea value={draft.description} onChange={(event) => setDraft({ ...draft, description: event.target.value })} placeholder="Description" />
-        <button className="primary" onClick={create}><Plus size={16} /> Create command</button>
+        <button className="primary" onClick={create}><Plus size={16} /> Create saved action</button>
       </section>
       {message && <p className="warning">{message}</p>}
       {preview && <ActionPreviewCard preview={preview} settings={settings} onDone={() => { setPreview(null); void refresh(); }} />}
@@ -237,8 +237,8 @@ export function CommandsScreen({ settings }: { settings: AppSettings }) {
                 <small>Runs: {template.run_count} {template.last_run_at ? `Last run ${new Date(template.last_run_at).toLocaleString()}` : ""}</small>
               </div>
               <div className="row-actions">
-                <button title={template.is_long_running ? "Start background process" : "Run command template"} disabled={!template.enabled || Boolean(validation)} onClick={() => run(template)}><Play size={16} /></button>
-                <button title="Delete command template" onClick={() => deleteCommandTemplate(template.id).then(() => refresh())}><Trash2 size={16} /></button>
+                <button title={template.is_long_running ? "Start running activity" : "Run saved action"} disabled={!template.enabled || Boolean(validation)} onClick={() => run(template)}><Play size={16} /></button>
+                <button title="Delete saved action" onClick={() => deleteCommandTemplate(template.id).then(() => refresh())}><Trash2 size={16} /></button>
               </div>
             </article>
           );

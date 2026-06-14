@@ -86,9 +86,9 @@ async function normalizeInput(action: ToolActionInput, settings: AppSettings): P
   if (action.toolName === "run_command_template") {
     const commandTemplateId = String(action.input.command_template_id ?? "");
     const template = await getCommandTemplateById(commandTemplateId);
-    if (!template) throw new Error("Klak can only run saved command templates.");
-    if (!template.enabled) throw new Error("This command template is disabled.");
-    if (isLongRunningCommand(template.command)) throw new Error("Long-running command templates are blocked until background process management exists.");
+    if (!template) throw new Error("Klak can only run saved actions.");
+    if (!template.enabled) throw new Error("This saved action is disabled.");
+    if (isLongRunningCommand(template.command)) throw new Error("Use Start Running Activity for approved long-running saved actions.");
     validateCommandSafety(template.command);
     await assertPathInsideAllowedFolder(template.working_directory, settings);
     return {
@@ -104,14 +104,14 @@ async function normalizeInput(action: ToolActionInput, settings: AppSettings): P
   if (action.toolName === "start_background_process") {
     const commandTemplateId = String(action.input.command_template_id ?? "");
     const template = await getCommandTemplateById(commandTemplateId);
-    if (!template) throw new Error("Klak can only start saved command templates.");
-    if (!template.enabled) throw new Error("This command template is disabled.");
-    if (!template.is_long_running || !template.allow_background_run) throw new Error("This command template is not approved for background runs.");
+    if (!template) throw new Error("Klak can only start saved actions.");
+    if (!template.enabled) throw new Error("This saved action is disabled.");
+    if (!template.is_long_running || !template.allow_background_run) throw new Error("This saved action is not approved for running activities.");
     validateCommandSafety(template.command);
     await assertPathInsideAllowedFolder(template.working_directory, settings);
     const running = await listRunningBackgroundProcesses();
-    if (running.some((process) => process.command_template_id === template.id)) {
-      throw new Error("A background process for this command template is already running.");
+    if (running.some((process) => process.command_template_id === template.id && process.working_directory === template.working_directory)) {
+      throw new Error("This saved action is already running for that folder.");
     }
     return {
       command_template_id: template.id,

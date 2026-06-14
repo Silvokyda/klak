@@ -12,10 +12,10 @@ export function LogsScreen() {
 
   return (
     <div className="screen">
-      <ScreenHeader title="Audit Logs" subtitle="Every proposed, approved, denied, blocked, failed, or completed action is listed here." />
+      <ScreenHeader title="Activity History" subtitle="Every proposed, approved, denied, blocked, failed, or completed action is listed here." />
       <section className="table">
         <div className="table-head">
-          <span>Tool</span>
+          <span>Capability</span>
           <span>Status</span>
           <span>Risk</span>
           <span>Approved</span>

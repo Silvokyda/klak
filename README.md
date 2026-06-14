@@ -70,7 +70,7 @@ Workflow command steps select saved command templates only. Project command butt
 
 ## Background Processes
 
-Long-running command templates can be marked as `Long-running` and `Background run`. Starting one creates a Klak-managed process record, writes bounded output to the system temp directory under `klak/process-logs`, and shows status in Processes.
+Long-running command templates can be marked as `Long-running` and `Background run`. Starting one creates a Klak-managed process record, writes bounded output to the system temp directory under `klak/process-logs`, and shows status in Running Activities.
 
 Klak only stops processes it started and recorded. Duplicate starts for the same template are blocked. On app start, stale process records are reconciled; if the native child is no longer known, the record is marked stopped or exited rather than killing arbitrary system processes.
 
@@ -109,6 +109,7 @@ Audio flow:
 - Native SQLite was verified at `C:\Users\silvance\AppData\Roaming\local.klak.operator\klak.db`.
 - If Windows Smart App Control blocks generated binaries, allow or rebuild according to your local Windows policy.
 - `src-tauri/icons/icon.ico` is required for Windows packaging.
+- Repeatable manual QA lives in `docs/MANUAL_QA.md`.
 
 ## Public Repo Hygiene
 

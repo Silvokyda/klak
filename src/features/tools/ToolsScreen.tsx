@@ -17,8 +17,8 @@ export function ToolsScreen({ settings, onSettingsChange }: { settings: AppSetti
   return (
     <div className="screen">
       <ScreenHeader
-        title="Tools"
-        subtitle="Safe local tools can be enabled here. Future risky tools stay disabled by default."
+        title="Capabilities"
+        subtitle="Safe local capabilities can be enabled here. Future risky capabilities stay disabled by default."
         actions={
           <label className="toggle">
             <input

@@ -1,4 +1,5 @@
 import { Activity, Bot, Briefcase, Database, GitBranch, History, Rocket, Settings, ShieldCheck, TerminalSquare, Workflow, Wrench } from "lucide-react";
+import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useMemo, useState } from "react";
 import type { AppSettings } from "../types";
 import { AppsScreen } from "../features/apps/AppsScreen";
@@ -42,13 +43,13 @@ export function App() {
       { id: "assistant" as const, label: "Assistant", icon: Bot },
       { id: "memory" as const, label: "Memory", icon: Database },
       { id: "projects" as const, label: "Projects", icon: Briefcase },
-      { id: "workflows" as const, label: "Workflows", icon: GitBranch },
+      { id: "workflows" as const, label: "Routines", icon: GitBranch },
       { id: "apps" as const, label: "Apps", icon: Rocket },
-      { id: "commands" as const, label: "Commands", icon: TerminalSquare },
-      { id: "processes" as const, label: "Processes", icon: Workflow },
-      { id: "tools" as const, label: "Tools", icon: Wrench },
-      { id: "logs" as const, label: "Logs", icon: History },
-      { id: "diagnostics" as const, label: "Diagnostics", icon: Activity },
+      { id: "commands" as const, label: "Saved Actions", icon: TerminalSquare },
+      { id: "processes" as const, label: "Running Activities", icon: Workflow },
+      { id: "tools" as const, label: "Capabilities", icon: Wrench },
+      { id: "logs" as const, label: "Activity History", icon: History },
+      { id: "diagnostics" as const, label: "Health Check", icon: Activity },
       { id: "settings" as const, label: "Settings", icon: Settings }
     ],
     []
@@ -114,11 +115,10 @@ async function reconcileBackgroundProcesses() {
       if (status.running) {
         await updateBackgroundProcess(process.id, { status: "running", process_pid: status.pid ?? process.process_pid ?? null });
       } else {
-        await markProcessStopped(process.id, { status: status.status as typeof process.status, exit_code: status.exit_code, last_output_preview: "Process was not running when Klak started." });
+        await markProcessStopped(process.id, { status: status.status as typeof process.status, exit_code: status.exit_code, last_output_preview: status.status === "stale" ? "This activity was from a previous Klak session and is no longer managed." : "Activity was not running when Klak started." });
       }
     } catch {
-      await markProcessStopped(process.id, { status: "exited", last_output_preview: "Marked stale on app start." });
+      await markProcessStopped(process.id, { status: "stale", last_output_preview: "Marked stale on app start. Klak will not try to stop arbitrary system processes." });
     }
   }));
 }
-import { invoke } from "@tauri-apps/api/core";

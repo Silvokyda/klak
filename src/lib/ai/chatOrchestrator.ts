@@ -31,21 +31,21 @@ export async function sendChatMessage(userMessage: string, settings: AppSettings
 
   if (/\b(save|remember)\b.+\bas (?:a )?command\b/i.test(userMessage)) {
     return {
-      message: "I can save that as a command template, but I need the project and an allowed working directory first. Add it in Commands so Klak can validate it before any run."
+      message: "I can save that as an approved saved action, but I need the project and an allowed working directory first. Add it in Saved Actions so Klak can validate it before any run."
     };
   }
 
   if (/\bwhat(?:'s| is)? running\b/i.test(userMessage)) {
     return {
       message: runningProcesses.length
-        ? `Klak is managing these background processes: ${runningProcesses.map((process) => `${process.name} (${process.status})`).join(", ")}.`
-        : "Klak is not managing any running background processes right now."
+        ? `Klak is managing these running activities: ${runningProcesses.map((process) => `${process.name} (${process.status})`).join(", ")}.`
+        : "Klak is not managing any running activities right now."
     };
   }
 
   if (/^\s*(kill|stop)\s+/i.test(userMessage) && /\b(node|cargo|npm|php|flutter|process)\b/i.test(userMessage)) {
     return {
-      message: "I can only stop background processes that Klak started from approved templates. Open Processes to stop a Klak-managed process."
+      message: "I can only stop activities that Klak started from approved saved actions. Open Running Activities to stop a Klak-managed activity."
     };
   }
 
@@ -55,8 +55,8 @@ export async function sendChatMessage(userMessage: string, settings: AppSettings
     const commands = project ? relevantCommandTemplates.filter((item) => item.project_id === project.id) : relevantCommandTemplates;
     return {
       message: commands.length
-        ? `I know these saved command templates: ${commands.map((item) => item.name).join(", ")}.`
-        : "I did not find saved command templates for that project."
+        ? `I know these saved actions: ${commands.map((item) => item.name).join(", ")}.`
+        : "I did not find saved actions for that project."
     };
   }
 
@@ -67,16 +67,16 @@ export async function sendChatMessage(userMessage: string, settings: AppSettings
       if (isLongRunningCommand(command.command)) {
         if (command.is_long_running && command.allow_background_run) {
           return {
-            message: `I found the long-running command template "${command.name}". Review the action preview before it starts as a background process.`,
+            message: `I found the long-running saved action "${command.name}". Review the action preview before it starts as a running activity.`,
             suggestedAction: { toolName: "start_background_process", input: { command_template_id: command.id } }
           };
         }
         return {
-          message: "That saved command looks long-running. Background process management is not implemented yet, so run it manually or add it as a manual workflow instruction for now."
+          message: "That saved action looks long-running, but it is not approved for Running Activities yet. Mark it as long-running and allow background run before starting it."
         };
       }
       return {
-        message: `I found the saved command template "${command.name}". Review the action preview before it runs.`,
+        message: `I found the saved action "${command.name}". Review the action preview before it runs.`,
         suggestedAction: { toolName: "run_command_template", input: { command_template_id: command.id } }
       };
     }
@@ -96,7 +96,7 @@ export async function sendChatMessage(userMessage: string, settings: AppSettings
     const project = relevantProjects.find((item) => item.name.toLowerCase().includes(requested));
     if (project?.startup_workflow_id && /\bstart\b/i.test(userMessage)) {
       return {
-        message: `I found "${project.name}" and its linked startup workflow. Open Projects to preview and run it with confirmation.`
+        message: `I found "${project.name}" and its linked startup routine. Open Projects to preview and run it with confirmation.`
       };
     }
     if (project?.repo_path) {
@@ -114,7 +114,7 @@ export async function sendChatMessage(userMessage: string, settings: AppSettings
 
   if (triggeredWorkflow) {
     return {
-      message: `I found the saved workflow "${triggeredWorkflow.name}". Open Workflows to preview and run it with confirmation.`
+      message: `I found the saved routine "${triggeredWorkflow.name}". Open Routines to preview and run it with confirmation.`
     };
   }
 

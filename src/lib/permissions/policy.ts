@@ -69,7 +69,7 @@ function describeAction(toolName: string, input: Record<string, unknown>): strin
   if (toolName === "create_note") return `I plan to create "${String(input.title ?? input.fileName ?? "note")}" at ${String(input.path ?? "")}.`;
   if (toolName === "copy_to_clipboard") return `I plan to copy this text to your clipboard:\n${safeClipboardPreview(String(input.text ?? ""))}`;
   if (toolName === "launch_app") return `I plan to launch ${String(input.app_name ?? "the registered app")} from ${String(input.executable_path ?? "")}.`;
-  if (toolName === "run_command_template") return `I plan to run the saved command "${String(input.command_name ?? "command template")}" in ${String(input.working_directory ?? "")}.`;
-  if (toolName === "start_background_process") return `I plan to start the background process "${String(input.command_name ?? "command template")}" in ${String(input.working_directory ?? "")}.`;
+  if (toolName === "run_command_template") return `I plan to run the saved action "${String(input.command_name ?? "saved action")}" in ${String(input.working_directory ?? "")}.`;
+  if (toolName === "start_background_process") return `I plan to start the running activity "${String(input.command_name ?? "saved action")}" in ${String(input.working_directory ?? "")}.`;
   return `I plan to use ${toolName}.`;
 }

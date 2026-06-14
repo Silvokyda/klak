@@ -150,7 +150,7 @@ export interface CommandTemplateRecord {
   last_result_summary?: string | null;
 }
 
-export type BackgroundProcessStatus = "starting" | "running" | "stopped" | "exited" | "failed" | "killed" | "blocked";
+export type BackgroundProcessStatus = "starting" | "running" | "stopped" | "exited" | "failed" | "killed" | "blocked" | "stale";
 
 export interface BackgroundProcessRecord {
   id: string;

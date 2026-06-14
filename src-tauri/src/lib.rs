@@ -6,11 +6,11 @@ use wait_timeout::ChildExt;
 
 use std::collections::HashMap;
 use std::fs;
-use std::fs::{File, OpenOptions};
+use std::fs::OpenOptions;
 use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Mutex, OnceLock};
 use std::thread;
 use std::time::{Duration, Instant};
 
@@ -67,6 +67,7 @@ const SECRET_SERVICE: &str = "Klak";
 const WHISPER_TIMEOUT_SECONDS: u64 = 120;
 const COMMAND_OUTPUT_LIMIT: usize = 8_000;
 const BACKGROUND_OUTPUT_LIMIT: usize = 12_000;
+const BACKGROUND_LOG_FILE_LIMIT: u64 = 96_000;
 
 static BACKGROUND_CHILDREN: OnceLock<Mutex<HashMap<String, Child>>> = OnceLock::new();
 
@@ -405,12 +406,11 @@ fn start_background_process(
             .as_deref()
             .unwrap_or(input.process_id.as_str()),
     )?;
-    let file = OpenOptions::new()
+    OpenOptions::new()
         .create(true)
         .append(true)
         .open(&output_log_path)
         .map_err(|error| format!("Unable to open background output log: {error}"))?;
-    let log = Arc::new(Mutex::new(file));
 
     let mut child = Command::new(program)
         .args(args)
@@ -421,10 +421,10 @@ fn start_background_process(
         .map_err(|error| format!("Unable to start background process: {error}"))?;
     let pid = child.id();
     if let Some(stdout) = child.stdout.take() {
-        pipe_to_log(stdout, Arc::clone(&log));
+        pipe_to_log(stdout, output_log_path.clone());
     }
     if let Some(stderr) = child.stderr.take() {
-        pipe_to_log(stderr, Arc::clone(&log));
+        pipe_to_log(stderr, output_log_path.clone());
     }
     if let Some(max_runtime_seconds) = input.max_runtime_seconds {
         let process_id = input.process_id.clone();
@@ -466,7 +466,7 @@ fn stop_background_process(
         return Ok(BackgroundProcessStatusOutput {
             process_id: input.process_id,
             running: false,
-            status: "stopped".into(),
+            status: "stale".into(),
             pid: None,
             exit_code: None,
             uptime_ms: None,
@@ -509,7 +509,7 @@ fn get_background_process_status(
         return Ok(BackgroundProcessStatusOutput {
             process_id: input.process_id,
             running: false,
-            status: "stopped".into(),
+            status: "stale".into(),
             pid: None,
             exit_code: None,
             uptime_ms: None,
@@ -603,22 +603,34 @@ fn resolve_background_log_path(value: &str) -> Result<PathBuf, String> {
     Ok(dir)
 }
 
-fn pipe_to_log<R: Read + Send + 'static>(mut reader: R, log: Arc<Mutex<File>>) {
+fn pipe_to_log<R: Read + Send + 'static>(mut reader: R, path: PathBuf) {
     thread::spawn(move || {
         let mut buffer = [0_u8; 4096];
         loop {
             match reader.read(&mut buffer) {
                 Ok(0) => break,
                 Ok(size) => {
-                    if let Ok(mut file) = log.lock() {
+                    if let Ok(mut file) = OpenOptions::new().create(true).append(true).open(&path) {
                         let _ = file.write_all(&buffer[..size]);
                         let _ = file.flush();
                     }
+                    let _ = trim_background_log(&path);
                 }
                 Err(_) => break,
             }
         }
     });
+}
+
+fn trim_background_log(path: &Path) -> Result<(), String> {
+    let metadata = fs::metadata(path).map_err(|error| error.to_string())?;
+    if metadata.len() <= BACKGROUND_LOG_FILE_LIMIT {
+        return Ok(());
+    }
+    let content = fs::read(path).map_err(|error| error.to_string())?;
+    let keep = BACKGROUND_LOG_FILE_LIMIT as usize;
+    let start = content.len().saturating_sub(keep);
+    fs::write(path, &content[start..]).map_err(|error| error.to_string())
 }
 
 fn looks_sensitive_output(value: &str) -> bool {
