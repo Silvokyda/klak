@@ -209,7 +209,7 @@ export function parseWorkflowSteps(workflow: WorkflowRecord): WorkflowStep[] {
 }
 
 export function validateWorkflowSteps(steps: WorkflowStep[]): void {
-  const allowed = new Set(["open_url", "open_folder", "create_note", "copy_to_clipboard", "search_memory", "create_memory", "manual_instruction"]);
+  const allowed = new Set(["open_url", "open_folder", "launch_app", "create_note", "copy_to_clipboard", "search_memory", "create_memory", "manual_instruction"]);
   for (const step of steps) {
     if (!step || typeof step !== "object") throw new Error("Workflow step must be an object.");
     if (!allowed.has(step.type)) throw new Error(`Unsupported workflow step: ${step.type}`);
@@ -220,7 +220,7 @@ export function validateWorkflowSteps(steps: WorkflowStep[]): void {
 }
 
 function inferWorkflowRisk(steps: WorkflowStep[]): RiskLevel {
-  if (steps.some((step) => ["open_folder", "create_note", "copy_to_clipboard", "create_memory"].includes(step.type))) return "medium";
+  if (steps.some((step) => ["open_folder", "launch_app", "create_note", "copy_to_clipboard", "create_memory"].includes(step.type))) return "medium";
   return "low";
 }
 

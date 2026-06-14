@@ -1,5 +1,6 @@
 import type { AppSettings, ToolActionInput } from "../../types";
 import { createActionPreview } from "../permissions/policy";
+import { getRegisteredAppById, validateExecutablePath } from "../apps/registeredAppsRepository";
 import { listTools } from "./toolRegistry";
 import {
   assertAllowedFolder,
@@ -60,6 +61,19 @@ async function normalizeInput(action: ToolActionInput, settings: AppSettings): P
       throw new Error("Klak will not save content that appears to contain secrets as memory.");
     }
     return action.input;
+  }
+  if (action.toolName === "launch_app") {
+    const registeredAppId = String(action.input.registered_app_id ?? "");
+    const app = await getRegisteredAppById(registeredAppId);
+    if (!app) throw new Error("Klak can only launch apps that are registered locally.");
+    if (!app.allowed) throw new Error("This registered app is disabled.");
+    validateExecutablePath(app.executable_path);
+    return {
+      registered_app_id: app.id,
+      app_name: app.name,
+      executable_path: app.executable_path,
+      app_type: app.app_type
+    };
   }
   return action.input;
 }

@@ -68,5 +68,6 @@ function describeAction(toolName: string, input: Record<string, unknown>): strin
   if (toolName === "search_memory") return `I plan to search local memory for "${String(input.query ?? "")}".`;
   if (toolName === "create_note") return `I plan to create "${String(input.title ?? input.fileName ?? "note")}" at ${String(input.path ?? "")}.`;
   if (toolName === "copy_to_clipboard") return `I plan to copy this text to your clipboard:\n${safeClipboardPreview(String(input.text ?? ""))}`;
+  if (toolName === "launch_app") return `I plan to launch ${String(input.app_name ?? "the registered app")} from ${String(input.executable_path ?? "")}.`;
   return `I plan to use ${toolName}.`;
 }

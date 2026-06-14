@@ -4,18 +4,51 @@ import { searchMemories } from "../memory/memoryRepository";
 import { listTools } from "../tools/toolRegistry";
 import { OpenAICompatibleProvider } from "./openAiCompatibleProvider";
 import { localContextCollector } from "../context/localContext";
+import { searchRegisteredApps } from "../apps/registeredAppsRepository";
 import { searchProjects } from "../projects/projectRepository";
 import { searchWorkflows } from "../workflows/workflowRepository";
 
 export async function sendChatMessage(userMessage: string, settings: AppSettings): Promise<AIResponse> {
-  const [relevantMemories, relevantProjects, relevantWorkflows, availableTools, recentActionLogs, localContext] = await Promise.all([
+  const [relevantMemories, relevantProjects, relevantWorkflows, relevantRegisteredApps, availableTools, recentActionLogs, localContext] = await Promise.all([
     searchMemories(userMessage),
     searchProjects(userMessage),
     searchWorkflows(userMessage),
+    searchRegisteredApps(userMessage),
     listTools(settings.allToolsDisabled),
     listActionLogs(),
     settings.localContextEnabled ? localContextCollector.collect() : Promise.resolve({})
   ]);
+
+  if (/\bremember\b.+\bas an app\b/i.test(userMessage) || /\bregister\b.+\bapp\b/i.test(userMessage)) {
+    return {
+      message: "I can remember that as a registered app, but I need the exact .exe path first. Add it in Apps so Klak can validate it and require approval before launch."
+    };
+  }
+
+  const launchRequest = userMessage.match(/\b(?:open|launch|start)\s+(.+?)\.?$/i);
+  if (launchRequest) {
+    const requested = launchRequest[1].trim().toLowerCase();
+    const app = relevantRegisteredApps.find((item) => item.allowed && item.name.toLowerCase().includes(requested));
+    if (app) {
+      return {
+        message: `I found the registered app "${app.name}". Review the action preview before it launches.`,
+        suggestedAction: { toolName: "launch_app", input: { registered_app_id: app.id } }
+      };
+    }
+
+    const project = relevantProjects.find((item) => item.name.toLowerCase().includes(requested));
+    if (project?.startup_workflow_id && /\bstart\b/i.test(userMessage)) {
+      return {
+        message: `I found "${project.name}" and its linked startup workflow. Open Projects to preview and run it with confirmation.`
+      };
+    }
+    if (project?.repo_path) {
+      return {
+        message: `I found "${project.name}". I can open its project folder after approval.`,
+        suggestedAction: { toolName: "open_folder", input: { path: project.repo_path } }
+      };
+    }
+  }
 
   const triggeredWorkflow = relevantWorkflows.find((workflow) => {
     const phrase = workflow.trigger_phrase?.trim();
@@ -94,6 +127,7 @@ export async function sendChatMessage(userMessage: string, settings: AppSettings
     relevantMemories: relevantMemories.slice(0, 8),
     relevantProjects: relevantProjects.slice(0, 5),
     relevantWorkflows: relevantWorkflows.slice(0, 5),
+    relevantRegisteredApps: relevantRegisteredApps.slice(0, 5),
     currentPermissionMode: settings.permissionMode,
     availableTools,
     recentActionLogs: recentActionLogs.slice(0, 10),

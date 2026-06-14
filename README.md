@@ -37,12 +37,21 @@ npm run tauri build
 - Local data is stored in `sqlite:klak.db` through the Tauri SQL plugin when Klak runs as a desktop app.
 - During browser-only Vite development, repositories use `klak.insecure_dev_database.v1` in localStorage so UI work can continue without the Tauri runtime.
 - Database initialization is idempotent. `initDatabase()` creates tables and records migration version `1` in `schema_migrations`.
-- SQLite tables store memories, action logs, non-secret app settings, tool settings, and allowed folders.
+- SQLite tables store memories, projects, workflows, registered apps, action logs, non-secret app settings, tool settings, and allowed folders.
 - API keys are stored through `secretStore`. In native Tauri, Klak uses Windows-backed storage through the Rust `keyring` crate. In browser-only development, Klak falls back to `insecureDevSecretStore.ts` and warns: "Development storage is active. Do not use production keys."
-- Implemented safe tools: `open_url`, `open_folder`, `create_note`, `copy_to_clipboard`, `search_memory`, and `create_memory`. They all go through permission checks, action previews, approval/denial, and audit logging.
+- Implemented safe tools: `open_url`, `open_folder`, `launch_app`, `create_note`, `copy_to_clipboard`, `search_memory`, and `create_memory`. They all go through permission checks, action previews, approval/denial, and audit logging.
+- The Apps screen lets users register approved `.exe` applications. Klak can launch only those registered apps, never arbitrary shell commands or arguments.
 - Dangerous tools are registered as disabled future extension points and blocked by the permission system.
 - Voice input is opt-in and push-to-talk only. Klak does not listen in the background and does not upload audio.
 - No telemetry, analytics, accounts, hosted backend, cloud sync, screenshot capture, browser automation, terminal execution, or unrestricted clipboard/file reading is implemented.
+
+## Registered Apps And Startup Workflows
+
+Register VS Code safely from Apps with its exact executable path, for example `C:\Users\<you>\AppData\Local\Programs\Microsoft VS Code\Code.exe`, type `editor`, and `Allowed` enabled. Klak blocks shell and terminal executables such as `powershell.exe`, `cmd.exe`, `wt.exe`, `WindowsTerminal.exe`, `bash.exe`, and `wsl.exe`.
+
+Workflows can be built with the step builder or the advanced JSON editor. Supported steps are `open_url`, `open_folder`, `launch_app`, `create_note`, `copy_to_clipboard`, `search_memory`, `create_memory`, and `manual_instruction`.
+
+To create a project startup workflow, register any apps first, create a workflow with safe steps, then link it from the Projects screen. Running a startup workflow still requires an explicit preview and user action; terminal commands remain manual instructions.
 
 ## Local Whisper CLI
 

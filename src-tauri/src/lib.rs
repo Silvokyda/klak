@@ -83,6 +83,24 @@ struct WhisperInput {
     keep_temp_audio_for_debugging: bool,
 }
 
+#[derive(serde::Deserialize)]
+struct LaunchRegisteredAppInput {
+    executable_path: String,
+}
+
+#[derive(serde::Deserialize)]
+struct ValidateRegisteredAppPathInput {
+    executable_path: String,
+}
+
+#[derive(serde::Serialize)]
+struct RegisteredAppPathCheck {
+    exists: bool,
+    valid_extension: bool,
+    blocked_shell: bool,
+    message: String,
+}
+
 #[derive(serde::Serialize)]
 struct WhisperOutput {
     transcript: String,
@@ -152,6 +170,86 @@ fn create_markdown_note(path: String, content: String) -> Result<(), String> {
 fn copy_text_to_clipboard(text: String) -> Result<(), String> {
     let mut clipboard = arboard::Clipboard::new().map_err(|error| error.to_string())?;
     clipboard.set_text(text).map_err(|error| error.to_string())
+}
+
+#[tauri::command]
+fn launch_registered_app(input: LaunchRegisteredAppInput) -> Result<(), String> {
+    let executable = PathBuf::from(input.executable_path.trim());
+    if !executable.is_file() {
+        return Err("Registered app executable does not exist.".into());
+    }
+    if executable
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| !extension.eq_ignore_ascii_case("exe"))
+        .unwrap_or(true)
+    {
+        return Err("Registered apps must point to a .exe file.".into());
+    }
+    let file_name = executable
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let blocked = [
+        "powershell.exe",
+        "cmd.exe",
+        "wt.exe",
+        "windowsterminal.exe",
+        "bash.exe",
+        "wsl.exe",
+    ];
+    if blocked.iter().any(|name| *name == file_name) {
+        return Err("Shell and terminal apps are blocked in this pass.".into());
+    }
+
+    Command::new(&executable)
+        .spawn()
+        .map_err(|error| format!("Unable to launch registered app: {error}"))?;
+    Ok(())
+}
+
+#[tauri::command]
+fn validate_registered_app_path(
+    input: ValidateRegisteredAppPathInput,
+) -> Result<RegisteredAppPathCheck, String> {
+    let executable = PathBuf::from(input.executable_path.trim());
+    let exists = executable.is_file();
+    let valid_extension = executable
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .map(|extension| extension.eq_ignore_ascii_case("exe"))
+        .unwrap_or(false);
+    let file_name = executable
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or("")
+        .to_lowercase();
+    let blocked = [
+        "powershell.exe",
+        "cmd.exe",
+        "wt.exe",
+        "windowsterminal.exe",
+        "bash.exe",
+        "wsl.exe",
+    ];
+    let blocked_shell = blocked.iter().any(|name| *name == file_name);
+    let message = if blocked_shell {
+        "Shell and terminal apps are blocked in this pass."
+    } else if !valid_extension {
+        "Registered apps must point to a .exe file."
+    } else if !exists {
+        "Executable file was not found."
+    } else {
+        "Registered app path is launchable."
+    };
+
+    Ok(RegisteredAppPathCheck {
+        exists,
+        valid_extension,
+        blocked_shell,
+        message: message.into(),
+    })
 }
 
 #[tauri::command]
@@ -387,6 +485,8 @@ pub fn run() {
             has_secret,
             create_markdown_note,
             copy_text_to_clipboard,
+            launch_registered_app,
+            validate_registered_app_path,
             save_temp_voice_audio,
             validate_whisper_setup,
             transcribe_audio_with_whisper

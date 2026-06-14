@@ -14,7 +14,7 @@ Memories are stored in the local SQLite `memories` table in the Tauri app. Brows
 - `document`: user-approved document context.
 - `command_history`: user-approved command or workflow history.
 
-Projects and workflows also have dedicated local tables. Use `project` and `workflow` memories for narrative facts and user preferences; use the `projects` and `workflows` records for structured fields such as repository path, status, trigger phrase, and workflow steps.
+Projects, workflows, and registered apps also have dedicated local tables. Use `project` and `workflow` memories for narrative facts and user preferences; use the structured records for repository path, status, trigger phrase, workflow steps, startup workflow links, and approved app paths.
 
 ## When To Save Memory
 
@@ -50,8 +50,10 @@ The safe `create_memory` tool is intended for user-approved facts, preferences, 
 
 ## Project and Workflow Memory
 
-Project records are managed by `src/lib/projects/projectRepository.ts` and store local context such as name, repository path, stack, status, URLs, and notes.
+Project records are managed by `src/lib/projects/projectRepository.ts` and store local context such as name, repository path, stack, status, URLs, notes, and an optional startup workflow.
 
-Workflow records are managed by `src/lib/workflows/workflowRepository.ts` and store repeatable local workflows as JSON steps. Workflow execution is limited to the existing safe tool registry: URL opening, allowed-folder opening, note creation inside allowed folders, clipboard writing, memory search, and memory creation. Manual instructions are shown as human-readable steps and are not executed by the app.
+Workflow records are managed by `src/lib/workflows/workflowRepository.ts` and store repeatable local workflows as JSON steps. Workflow execution is limited to the existing safe tool registry: URL opening, allowed-folder opening, registered app launch, note creation inside allowed folders, clipboard writing, memory search, and memory creation. Manual instructions are shown as human-readable steps and are not executed by the app.
 
-Assistant requests include relevant memories, projects, and workflow summaries. Saved workflow trigger phrases are detected locally; the assistant points the user to the Workflows screen for preview and confirmation rather than running workflows silently.
+Registered app records are managed by `src/lib/apps/registeredAppsRepository.ts`. They are structured local memory for approved apps, not command history and not a shell.
+
+Assistant requests include relevant memories, projects, workflow summaries, and registered app summaries. Saved workflow trigger phrases are detected locally; the assistant points the user to the Workflows or Projects screen for preview and confirmation rather than running workflows silently.

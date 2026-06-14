@@ -1,6 +1,7 @@
 import { invoke } from "@tauri-apps/api/core";
 import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import type { ActionPreview, AppSettings, MemoryType } from "../../types";
+import { touchRegisteredApp, validateExecutablePath } from "../apps/registeredAppsRepository";
 import { createMemory } from "../memory/memoryRepository";
 import { updateActionLog } from "../logs/actionLogRepository";
 import { nowIso } from "../utils";
@@ -44,6 +45,12 @@ export async function executeApprovedTool(preview: ActionPreview, settings: AppS
       });
     } else if (preview.tool.name === "copy_to_clipboard") {
       await invoke("copy_text_to_clipboard", { text: String(preview.input.text ?? "") });
+    } else if (preview.tool.name === "launch_app") {
+      validateExecutablePath(String(preview.input.executable_path ?? ""));
+      await invoke("launch_registered_app", {
+        input: { executable_path: String(preview.input.executable_path) }
+      });
+      await touchRegisteredApp(String(preview.input.registered_app_id ?? ""));
     } else {
       throw new Error(`${preview.tool.label} is registered but execution is stubbed in this MVP.`);
     }

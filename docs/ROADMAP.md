@@ -16,8 +16,10 @@
 - Project memory screen and repository
 - Workflow memory screen, safe preview, and safe execution
 - Diagnostics screen
+- Controlled registered app launcher
+- Safer workflow builder UI
+- Project startup workflow links
 - Improved memory search
-- App launcher
 - Voice QA polish and device selection
 - Better tool proposal parsing
 

@@ -13,6 +13,7 @@ export interface ProjectInput {
   dev_url?: string | null;
   production_url?: string | null;
   notes?: string | null;
+  startup_workflow_id?: string | null;
 }
 
 export interface ProjectFilters {
@@ -36,11 +37,12 @@ export async function createProject(input: ProjectInput): Promise<ProjectRecord>
     notes: input.notes ?? null,
     created_at: timestamp,
     updated_at: timestamp,
-    last_opened_at: null
+    last_opened_at: null,
+    startup_workflow_id: input.startup_workflow_id ?? null
   };
   await db.execute(
-    `INSERT INTO projects (id, name, description, repo_path, primary_stack, project_type, status, default_branch, dev_url, production_url, notes, created_at, updated_at, last_opened_at)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO projects (id, name, description, repo_path, primary_stack, project_type, status, default_branch, dev_url, production_url, notes, created_at, updated_at, last_opened_at, startup_workflow_id)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       project.id,
       project.name,
@@ -55,7 +57,8 @@ export async function createProject(input: ProjectInput): Promise<ProjectRecord>
       project.notes ?? null,
       project.created_at,
       project.updated_at,
-      project.last_opened_at ?? null
+      project.last_opened_at ?? null,
+      project.startup_workflow_id ?? null
     ]
   );
   return project;
@@ -68,7 +71,7 @@ export async function updateProject(projectId: string, input: Partial<ProjectInp
   const db = await getDatabase();
   await db.execute(
     `UPDATE projects
-     SET name = ?, description = ?, repo_path = ?, primary_stack = ?, project_type = ?, status = ?, default_branch = ?, dev_url = ?, production_url = ?, notes = ?, updated_at = ?
+     SET name = ?, description = ?, repo_path = ?, primary_stack = ?, project_type = ?, status = ?, default_branch = ?, dev_url = ?, production_url = ?, notes = ?, updated_at = ?, startup_workflow_id = ?
      WHERE id = ?`,
     [
       updated.name,
@@ -82,6 +85,7 @@ export async function updateProject(projectId: string, input: Partial<ProjectInp
       updated.production_url ?? null,
       updated.notes ?? null,
       updated.updated_at,
+      updated.startup_workflow_id ?? null,
       projectId
     ]
   );

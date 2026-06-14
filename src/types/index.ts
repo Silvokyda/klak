@@ -108,11 +108,27 @@ export interface ProjectRecord {
   created_at: string;
   updated_at: string;
   last_opened_at?: string | null;
+  startup_workflow_id?: string | null;
+}
+
+export type RegisteredAppType = "editor" | "browser" | "design" | "communication" | "productivity" | "dev_tool" | "other";
+
+export interface RegisteredAppRecord {
+  id: string;
+  name: string;
+  executable_path: string;
+  app_type: RegisteredAppType;
+  description?: string | null;
+  allowed: boolean;
+  created_at: string;
+  updated_at: string;
+  last_launched_at?: string | null;
 }
 
 export type WorkflowStepType =
   | "open_url"
   | "open_folder"
+  | "launch_app"
   | "create_note"
   | "copy_to_clipboard"
   | "search_memory"
@@ -154,6 +170,7 @@ export interface AIRequest {
   relevantMemories: MemoryRecord[];
   relevantProjects?: ProjectRecord[];
   relevantWorkflows?: WorkflowRecord[];
+  relevantRegisteredApps?: RegisteredAppRecord[];
   currentPermissionMode: PermissionMode;
   availableTools: ToolDefinition[];
   recentActionLogs: ActionLog[];

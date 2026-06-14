@@ -25,6 +25,11 @@ export async function initDatabase(): Promise<void> {
       await db.execute(statement);
     }
   }
+  try {
+    await db.execute("ALTER TABLE projects ADD COLUMN startup_workflow_id TEXT");
+  } catch {
+    // Existing databases may already have the column.
+  }
 }
 
 export async function getDatabase(): Promise<DbAdapter> {
@@ -41,6 +46,7 @@ export async function resetLocalDatabase(): Promise<void> {
   await db.execute("DELETE FROM allowed_folders");
   await db.execute("DELETE FROM projects");
   await db.execute("DELETE FROM workflows");
+  await db.execute("DELETE FROM registered_apps");
 }
 
 async function createAdapter(): Promise<DbAdapter> {
@@ -73,6 +79,7 @@ function createInsecureDevDatabase(): DbAdapter {
     allowed_folders: Row[];
     projects: Row[];
     workflows: Row[];
+    registered_apps: Row[];
     schema_migrations: Row[];
   };
 
@@ -84,6 +91,7 @@ function createInsecureDevDatabase(): DbAdapter {
     allowed_folders: [],
     projects: [],
     workflows: [],
+    registered_apps: [],
     schema_migrations: []
   });
 
@@ -94,7 +102,7 @@ function createInsecureDevDatabase(): DbAdapter {
     async execute(sql, bindValues = []) {
       const state = read();
       const normalized = normalizeSql(sql);
-      if (normalized.startsWith("CREATE TABLE")) return;
+      if (normalized.startsWith("CREATE TABLE") || normalized.startsWith("ALTER TABLE")) return;
       if (normalized.startsWith("INSERT INTO SCHEMA_MIGRATIONS")) state.schema_migrations.push({ version: bindValues[0], applied_at: bindValues[1] });
       else if (normalized.startsWith("INSERT INTO MEMORIES")) upsert(state.memories, memoryRow(bindValues));
       else if (normalized.startsWith("UPDATE MEMORIES")) updateById(state.memories, String(bindValues[9]), memoryPatch(bindValues));
@@ -108,8 +116,12 @@ function createInsecureDevDatabase(): DbAdapter {
       else if (normalized.startsWith("DELETE FROM ALLOWED_FOLDERS")) removeById(state.allowed_folders, String(bindValues[0]));
       else if (normalized.startsWith("INSERT INTO PROJECTS")) upsert(state.projects, projectRow(bindValues));
       else if (normalized.startsWith("UPDATE PROJECTS SET LAST_OPENED_AT")) updateById(state.projects, String(bindValues[1]), { last_opened_at: bindValues[0] });
-      else if (normalized.startsWith("UPDATE PROJECTS")) updateById(state.projects, String(bindValues[11]), projectPatch(bindValues));
+      else if (normalized.startsWith("UPDATE PROJECTS")) updateById(state.projects, String(bindValues[12]), projectPatch(bindValues));
       else if (normalized.startsWith("DELETE FROM PROJECTS")) removeById(state.projects, String(bindValues[0]));
+      else if (normalized.startsWith("INSERT INTO REGISTERED_APPS")) upsert(state.registered_apps, registeredAppRow(bindValues));
+      else if (normalized.startsWith("UPDATE REGISTERED_APPS SET LAST_LAUNCHED_AT")) updateById(state.registered_apps, String(bindValues[1]), { last_launched_at: bindValues[0] });
+      else if (normalized.startsWith("UPDATE REGISTERED_APPS")) updateById(state.registered_apps, String(bindValues[7]), registeredAppPatch(bindValues));
+      else if (normalized.startsWith("DELETE FROM REGISTERED_APPS")) removeById(state.registered_apps, String(bindValues[0]));
       else if (normalized.startsWith("INSERT INTO WORKFLOWS")) upsert(state.workflows, workflowRow(bindValues));
       else if (normalized.startsWith("UPDATE WORKFLOWS SET LAST_RUN_AT")) {
         const id = String(bindValues[1]);
@@ -136,6 +148,7 @@ function createInsecureDevDatabase(): DbAdapter {
       else if (normalized.includes("FROM ALLOWED_FOLDERS")) rows = [...state.allowed_folders].sort(sortCreatedDesc);
       else if (normalized.includes("FROM PROJECTS")) rows = selectProjects(state.projects, normalized, bindValues);
       else if (normalized.includes("FROM WORKFLOWS")) rows = selectWorkflows(state.workflows, normalized, bindValues);
+      else if (normalized.includes("FROM REGISTERED_APPS")) rows = selectRegisteredApps(state.registered_apps, normalized, bindValues);
       return rows as T[];
     }
   };
@@ -194,13 +207,23 @@ function actionPatch(values: BindValue[]): Row {
 }
 
 function projectRow(values: BindValue[]): Row {
-  const [id, name, description, repo_path, primary_stack, project_type, status, default_branch, dev_url, production_url, notes, created_at, updated_at, last_opened_at] = values;
-  return { id, name, description, repo_path, primary_stack, project_type, status, default_branch, dev_url, production_url, notes, created_at, updated_at, last_opened_at };
+  const [id, name, description, repo_path, primary_stack, project_type, status, default_branch, dev_url, production_url, notes, created_at, updated_at, last_opened_at, startup_workflow_id] = values;
+  return { id, name, description, repo_path, primary_stack, project_type, status, default_branch, dev_url, production_url, notes, created_at, updated_at, last_opened_at, startup_workflow_id };
 }
 
 function projectPatch(values: BindValue[]): Row {
-  const [name, description, repo_path, primary_stack, project_type, status, default_branch, dev_url, production_url, notes, updated_at] = values;
-  return { name, description, repo_path, primary_stack, project_type, status, default_branch, dev_url, production_url, notes, updated_at };
+  const [name, description, repo_path, primary_stack, project_type, status, default_branch, dev_url, production_url, notes, updated_at, startup_workflow_id] = values;
+  return { name, description, repo_path, primary_stack, project_type, status, default_branch, dev_url, production_url, notes, updated_at, startup_workflow_id };
+}
+
+function registeredAppRow(values: BindValue[]): Row {
+  const [id, name, executable_path, app_type, description, allowed, created_at, updated_at, last_launched_at] = values;
+  return { id, name, executable_path, app_type, description, allowed, created_at, updated_at, last_launched_at };
+}
+
+function registeredAppPatch(values: BindValue[]): Row {
+  const [name, executable_path, app_type, description, allowed, updated_at, last_launched_at] = values;
+  return { name, executable_path, app_type, description, allowed, updated_at, last_launched_at };
 }
 
 function workflowRow(values: BindValue[]): Row {
@@ -258,6 +281,16 @@ function selectWorkflows(rows: Row[], sql: string, values: BindValue[]): Row[] {
     const query = String(values[0] ?? "").replace(/%/g, "").toLowerCase();
     result = result.filter((row) => `${row.name} ${row.description} ${row.trigger_phrase} ${row.steps_json}`.toLowerCase().includes(query));
   } else if (sql.includes("PROJECT_ID =")) result = result.filter((row) => row.project_id === values[0]);
+  return result.sort((a, b) => Date.parse(String(b.updated_at)) - Date.parse(String(a.updated_at)));
+}
+
+function selectRegisteredApps(rows: Row[], sql: string, values: BindValue[]): Row[] {
+  let result = [...rows];
+  if (sql.includes("WHERE ID =")) result = result.filter((row) => row.id === values[0]);
+  else if (sql.includes("LIKE")) {
+    const query = String(values[0] ?? "").replace(/%/g, "").toLowerCase();
+    result = result.filter((row) => `${row.name} ${row.executable_path} ${row.app_type} ${row.description}`.toLowerCase().includes(query));
+  } else if (sql.includes("ALLOWED =")) result = result.filter((row) => row.allowed === values[0]);
   return result.sort((a, b) => Date.parse(String(b.updated_at)) - Date.parse(String(a.updated_at)));
 }
 

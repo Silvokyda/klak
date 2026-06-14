@@ -58,7 +58,20 @@ CREATE TABLE IF NOT EXISTS projects (
   notes TEXT,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
-  last_opened_at TEXT
+  last_opened_at TEXT,
+  startup_workflow_id TEXT
+);
+
+CREATE TABLE IF NOT EXISTS registered_apps (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  executable_path TEXT NOT NULL,
+  app_type TEXT NOT NULL,
+  description TEXT,
+  allowed INTEGER DEFAULT 1,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL,
+  last_launched_at TEXT
 );
 
 CREATE TABLE IF NOT EXISTS workflows (

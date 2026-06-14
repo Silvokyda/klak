@@ -51,18 +51,18 @@ export const initialTools: ToolDefinition[] = [
     future: false
   },
   {
+    name: "launch_app",
+    label: "Launch App",
+    description: "Launch an app that the user registered and allowed.",
+    riskLevel: "medium",
+    enabled: true,
+    future: false
+  },
+  {
     name: "browser_automation",
     label: "Browser Automation",
     description: "Future controlled browser workflows.",
     riskLevel: "high",
-    enabled: false,
-    future: true
-  },
-  {
-    name: "app_launcher",
-    label: "App Launcher",
-    description: "Future app launching.",
-    riskLevel: "medium",
     enabled: false,
     future: true
   },

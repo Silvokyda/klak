@@ -62,12 +62,27 @@ In the native Tauri app, `secretStore` calls Rust commands backed by the `keyrin
 
 - `open_url` allows only `http` and `https`.
 - `open_folder` allows only folders already present in `allowed_folders`.
+- `launch_app` allows only registered, enabled `.exe` applications and uses a native direct spawn without shell interpolation.
 - `create_note` writes only inside allowed folders and refuses to overwrite existing files.
 - `copy_to_clipboard` writes text only after user approval and never reads clipboard automatically.
 - `search_memory` searches local memory and should avoid logging raw sensitive queries.
 - `create_memory` must not save secrets as memories.
 
 All tool calls pass through preview, approval or denial, and audit logging.
+
+## App Launcher Rules
+
+The app launcher is not terminal execution. Klak stores approved applications in `registered_apps` and launches only by `registered_app_id`.
+
+- Unknown apps are blocked.
+- Disabled apps are blocked.
+- Non-`.exe` paths are blocked.
+- Shell and terminal executables are blocked: `powershell.exe`, `cmd.exe`, `wt.exe`, `WindowsTerminal.exe`, `bash.exe`, and `wsl.exe`.
+- Arbitrary arguments are not accepted.
+- Launch attempts are previewed, approved, executed through the native command, and logged.
+- Missing executable files are blocked by the native command.
+
+Terminal execution is intentionally not implemented yet because it needs a separate command policy, argument model, working-directory constraints, output capture, cancellation, and stronger review UX.
 
 ## Voice Rules
 

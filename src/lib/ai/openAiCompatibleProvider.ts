@@ -43,6 +43,12 @@ export class OpenAICompatibleProvider implements AIProvider {
                 triggerPhrase: workflow.trigger_phrase,
                 riskLevel: workflow.risk_level
               })),
+              registeredApps: (input.relevantRegisteredApps ?? []).map((app) => ({
+                id: app.id,
+                name: app.name,
+                appType: app.app_type,
+                allowed: app.allowed
+              })),
               permissionMode: input.currentPermissionMode,
               availableTools: input.availableTools.map((tool) => ({
                 name: tool.name,
