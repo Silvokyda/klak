@@ -47,9 +47,9 @@ npm run tauri build
 
 ## Registered Apps And Startup Workflows
 
-Click Scan for apps in Apps to find safe suggestions from Windows App Paths and installed-app registry metadata. Select only the apps you want Klak to remember, then click Add selected apps. You can still register manually with an exact executable path when needed.
+Click Scan for apps in Apps to find safe suggestions from Windows App Paths and installed-app registry metadata. Klak prioritizes recognizable user-facing apps, shows icons when Windows exposes them, and separates technical helpers, installers, update tools, and unsupported system items behind a toggle. Select only the apps you want Klak to remember, then click Add selected apps. You can still register manually with an exact executable path when needed.
 
-Klak blocks system command and scripting tools such as `powershell.exe`, `cmd.exe`, `pwsh.exe`, `wscript.exe`, `cscript.exe`, `mshta.exe`, `rundll32.exe`, `regedit.exe`, `diskpart.exe`, `wt.exe`, `WindowsTerminal.exe`, `bash.exe`, and `wsl.exe`. App discovery v1 does not parse Start Menu `.lnk` shortcuts, so shortcut-only apps may need manual registration.
+Klak blocks system command, scripting, and CLI tools such as `powershell.exe`, `cmd.exe`, `pwsh.exe`, `winget.exe`, `python.exe`, `py.exe`, `ngrok.exe`, `wscript.exe`, `cscript.exe`, `mshta.exe`, `rundll32.exe`, `regedit.exe`, `diskpart.exe`, `wt.exe`, `WindowsTerminal.exe`, `bash.exe`, and `wsl.exe`. App discovery v1 does not parse Start Menu `.lnk` shortcuts, so shortcut-only apps may need manual registration.
 
 Workflows can be built with the step builder or the advanced JSON editor. Supported steps are `open_url`, `open_folder`, `launch_app`, `create_note`, `copy_to_clipboard`, `search_memory`, `create_memory`, and `manual_instruction`.
 

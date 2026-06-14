@@ -79,12 +79,12 @@ The app launcher is not terminal execution. Klak stores approved applications in
 - Unknown apps are blocked.
 - Disabled apps are blocked.
 - Non-`.exe` paths are blocked.
-- System command, scripting, shell, and terminal executables are blocked: `cmd.exe`, `powershell.exe`, `pwsh.exe`, `wscript.exe`, `cscript.exe`, `mshta.exe`, `rundll32.exe`, `regsvr32.exe`, `regedit.exe`, `taskkill.exe`, `shutdown.exe`, `format.com`, `diskpart.exe`, `bcdedit.exe`, `wt.exe`, `WindowsTerminal.exe`, `bash.exe`, and `wsl.exe`.
+- System command, scripting, shell, terminal, and CLI executables are blocked: `cmd.exe`, `powershell.exe`, `pwsh.exe`, `winget.exe`, `python.exe`, `python3.exe`, `pythonw.exe`, `py.exe`, `pyw.exe`, `pymanager.exe`, `pywmanager.exe`, `ngrok.exe`, `wscript.exe`, `cscript.exe`, `mshta.exe`, `rundll32.exe`, `regsvr32.exe`, `regedit.exe`, `taskkill.exe`, `shutdown.exe`, `format.com`, `diskpart.exe`, `bcdedit.exe`, `wt.exe`, `WindowsTerminal.exe`, `bash.exe`, and `wsl.exe`.
 - Arbitrary arguments are not accepted.
 - Launch attempts are previewed, approved, executed through the native command, and logged.
 - Missing executable files are blocked by the native command.
 
-App discovery is user-approved and bounded. Klak can read safe Windows app metadata from App Paths and installed-app uninstall registry keys, show suggestions, and save only selected apps after a fresh native validation pass. Klak does not silently register apps, silently launch discovered apps, scan the whole disk, scan Downloads or temp folders, or use discovered candidates to bypass app launch validation. Start Menu shortcut parsing is not implemented in app discovery v1.
+App discovery is user-approved and bounded. Klak can read safe Windows app metadata from App Paths and installed-app uninstall registry keys, show quality-filtered suggestions with app icons when available, and save only selected apps after a fresh native validation pass. Installer, uninstaller, update-helper, redistributable, SDK/runtime, system helper, diagnostic, admin server, and blocked CLI candidates are not normal suggestions. Klak does not silently register apps, silently launch discovered apps, scan the whole disk, scan Downloads or temp folders, or use discovered candidates to bypass app launch validation. Start Menu shortcut parsing is not implemented in app discovery v1.
 
 Terminal execution is intentionally not implemented yet because it needs a separate command policy, argument model, working-directory constraints, output capture, cancellation, and stronger review UX.
 

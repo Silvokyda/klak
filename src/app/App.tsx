@@ -18,6 +18,7 @@ import { defaultSettings, loadSettings, saveSettings } from "../lib/storage/sett
 import { labelPermissionMode } from "../lib/utils";
 import { initDatabase } from "../lib/db/database";
 import { listRunningBackgroundProcesses, markProcessStopped, updateBackgroundProcess } from "../lib/processes/backgroundProcessRepository";
+import klakLogo from "../../assets/klak-icon.png";
 
 type View = "assistant" | "memory" | "projects" | "workflows" | "apps" | "commands" | "processes" | "tools" | "logs" | "diagnostics" | "settings";
 
@@ -65,7 +66,9 @@ export function App() {
     <div className="shell">
       <aside className="sidebar">
         <div className="brand">
-          <div className="mark">K</div>
+          <div className="mark app-logo-mark">
+            <img src={klakLogo} alt="" />
+          </div>
           <div>
             <h1>Klak</h1>
             <p>your local AI operator</p>

@@ -134,6 +134,7 @@ export interface DiscoveredAppCandidate {
   publisher?: string | null;
   icon_path?: string | null;
   confidence: "high" | "medium" | "low" | string;
+  category: "recommended" | "already_registered" | "advanced" | "unsupported" | "blocked" | string;
   is_registered: boolean;
   is_blocked: boolean;
   block_reason?: string | null;

@@ -114,6 +114,7 @@ struct DiscoveredAppCandidate {
     publisher: Option<String>,
     icon_path: Option<String>,
     confidence: String,
+    category: String,
     is_registered: bool,
     is_blocked: bool,
     block_reason: Option<String>,
@@ -374,6 +375,14 @@ fn register_discovered_apps(
             let mut rejected_candidate = current;
             rejected_candidate.is_blocked = true;
             rejected_candidate.block_reason = Some(error);
+            rejected.push(rejected_candidate);
+            continue;
+        }
+        if !matches!(current.category.as_str(), "recommended" | "advanced") {
+            let mut rejected_candidate = current;
+            rejected_candidate.is_blocked = true;
+            rejected_candidate.block_reason =
+                Some("This suggestion is not a user-facing app Klak should register.".into());
             rejected.push(rejected_candidate);
             continue;
         }
@@ -688,6 +697,15 @@ fn is_blocked_app_executable_name(file_name: &str) -> bool {
         "cmd.exe"
             | "powershell.exe"
             | "pwsh.exe"
+            | "winget.exe"
+            | "python.exe"
+            | "python3.exe"
+            | "pythonw.exe"
+            | "py.exe"
+            | "pyw.exe"
+            | "pymanager.exe"
+            | "pywmanager.exe"
+            | "ngrok.exe"
             | "wscript.exe"
             | "cscript.exe"
             | "mshta.exe"
@@ -827,6 +845,9 @@ fn scan_installed_apps_impl(
             let publisher = app_key.get_value::<String, _>("Publisher").ok();
             let icon = app_key.get_value::<String, _>("DisplayIcon").ok();
             let install_location = app_key.get_value::<String, _>("InstallLocation").ok();
+            let icon_path = icon
+                .as_deref()
+                .and_then(extract_icon_image_from_registry_value);
             if let Some(path) =
                 icon.and_then(|value| extract_executable_from_registry_value(&value))
             {
@@ -837,6 +858,7 @@ fn scan_installed_apps_impl(
                     source,
                     "medium",
                     publisher.clone(),
+                    icon_path.clone(),
                     registered_paths,
                     &detected_at,
                 );
@@ -850,6 +872,7 @@ fn scan_installed_apps_impl(
                         source,
                         "low",
                         publisher,
+                        None,
                         registered_paths,
                         &detected_at,
                     );
@@ -860,8 +883,8 @@ fn scan_installed_apps_impl(
 
     let mut values: Vec<_> = candidates.into_values().collect();
     values.sort_by(|left, right| {
-        left.is_blocked
-            .cmp(&right.is_blocked)
+        category_rank(&left.category)
+            .cmp(&category_rank(&right.category))
             .then(left.name.to_lowercase().cmp(&right.name.to_lowercase()))
     });
     values.truncate(300);
@@ -869,7 +892,14 @@ fn scan_installed_apps_impl(
 }
 
 #[cfg(windows)]
-fn collect_uninstall_metadata() -> HashMap<String, Option<String>> {
+#[derive(Clone)]
+struct AppMetadata {
+    publisher: Option<String>,
+    icon_path: Option<String>,
+}
+
+#[cfg(windows)]
+fn collect_uninstall_metadata() -> HashMap<String, AppMetadata> {
     use winreg::enums::{
         HKEY_CURRENT_USER, HKEY_LOCAL_MACHINE, KEY_READ, KEY_WOW64_32KEY, KEY_WOW64_64KEY,
     };
@@ -903,8 +933,18 @@ fn collect_uninstall_metadata() -> HashMap<String, Option<String>> {
             };
             let name = app_key.get_value::<String, _>("DisplayName").ok();
             let publisher = app_key.get_value::<String, _>("Publisher").ok();
+            let icon_path = app_key
+                .get_value::<String, _>("DisplayIcon")
+                .ok()
+                .and_then(|value| extract_icon_image_from_registry_value(&value));
             if let Some(name) = name {
-                publishers.insert(normalize_app_name(&name), publisher);
+                publishers.insert(
+                    normalize_app_name(&name),
+                    AppMetadata {
+                        publisher,
+                        icon_path,
+                    },
+                );
             }
         }
     }
@@ -918,14 +958,13 @@ fn add_candidate(
     name: String,
     source: &str,
     confidence: &str,
-    publishers: &HashMap<String, Option<String>>,
+    publishers: &HashMap<String, AppMetadata>,
     registered_paths: &[String],
     detected_at: &str,
 ) {
-    let publisher = publishers
-        .get(&normalize_app_name(&name))
-        .cloned()
-        .flatten();
+    let metadata = publishers.get(&normalize_app_name(&name)).cloned();
+    let publisher = metadata.as_ref().and_then(|item| item.publisher.clone());
+    let icon_path = metadata.and_then(|item| item.icon_path);
     add_candidate_with_publisher(
         candidates,
         path,
@@ -933,6 +972,7 @@ fn add_candidate(
         source,
         confidence,
         publisher,
+        icon_path,
         registered_paths,
         detected_at,
     );
@@ -946,6 +986,7 @@ fn add_candidate_with_publisher(
     source: &str,
     confidence: &str,
     publisher: Option<String>,
+    icon_path: Option<String>,
     registered_paths: &[String],
     detected_at: &str,
 ) {
@@ -974,18 +1015,31 @@ fn add_candidate_with_publisher(
         .and_then(|extension| extension.to_str())
         .map(|extension| extension.eq_ignore_ascii_case("exe"))
         .unwrap_or(false);
-    let blocked = is_blocked_app_executable_name(&file_name);
-    let unsupported = !valid_extension;
-    let block_reason = if blocked {
-        Some("System command and scripting tools cannot be registered as normal apps.".into())
-    } else if unsupported {
-        Some("Only Windows .exe apps can be registered.".into())
-    } else {
-        None
-    };
-    let name = clean_display_name(&name, &file_name);
+    let name = normalize_display_name(
+        &clean_display_name(&name, &file_name),
+        &file_name,
+        publisher.as_deref(),
+    );
     let normalized_name = normalize_app_name(&name);
+    let registered = registered_paths.iter().any(|path| path == &compare_path);
+    let quality = classify_app_candidate(
+        &name,
+        &executable_path,
+        &file_name,
+        publisher.as_deref(),
+        confidence,
+        registered,
+        valid_extension,
+    );
     let id = discovered_app_id(source, &compare_path);
+    let icon_path = icon_path.or_else(|| {
+        matches!(
+            quality.category.as_str(),
+            "recommended" | "already_registered" | "advanced"
+        )
+        .then(|| cached_app_icon_path(&resolved, &id))
+        .flatten()
+    });
     let candidate = DiscoveredAppCandidate {
         id: id.clone(),
         name,
@@ -993,11 +1047,12 @@ fn add_candidate_with_publisher(
         executable_path: Some(executable_path),
         source: source.into(),
         publisher,
-        icon_path: None,
-        confidence: confidence.into(),
-        is_registered: registered_paths.iter().any(|path| path == &compare_path),
-        is_blocked: blocked || unsupported,
-        block_reason,
+        icon_path,
+        confidence: quality.confidence,
+        category: quality.category,
+        is_registered: registered,
+        is_blocked: quality.is_blocked,
+        block_reason: quality.block_reason,
         detected_at: detected_at.into(),
     };
 
@@ -1028,6 +1083,266 @@ fn extract_executable_from_registry_value(value: &str) -> Option<String> {
         .map(|index| trimmed[..index + 4].trim_end_matches(',').to_string())
 }
 
+#[cfg(windows)]
+fn extract_icon_image_from_registry_value(value: &str) -> Option<String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return None;
+    }
+    let candidate = if let Some(rest) = trimmed.strip_prefix('"') {
+        rest.find('"').map(|end| rest[..end].to_string())
+    } else {
+        trimmed
+            .split(',')
+            .next()
+            .map(|part| part.trim().to_string())
+    }?;
+    let path = PathBuf::from(candidate);
+    let extension = path
+        .extension()
+        .and_then(|extension| extension.to_str())
+        .unwrap_or("")
+        .to_ascii_lowercase();
+    if !matches!(extension.as_str(), "ico" | "png" | "jpg" | "jpeg" | "webp") {
+        return None;
+    }
+    path.is_file().then(|| {
+        path.canonicalize()
+            .unwrap_or(path)
+            .to_string_lossy()
+            .to_string()
+    })
+}
+
+struct CandidateQuality {
+    category: String,
+    confidence: String,
+    is_blocked: bool,
+    block_reason: Option<String>,
+}
+
+fn classify_app_candidate(
+    name: &str,
+    executable_path: &str,
+    file_name: &str,
+    publisher: Option<&str>,
+    source_confidence: &str,
+    is_registered: bool,
+    valid_extension: bool,
+) -> CandidateQuality {
+    if is_registered {
+        return CandidateQuality {
+            category: "already_registered".into(),
+            confidence: "already added".into(),
+            is_blocked: false,
+            block_reason: None,
+        };
+    }
+    if !valid_extension {
+        return unsupported_quality("Only Windows .exe apps can be registered.");
+    }
+    if is_blocked_app_executable_name(file_name) {
+        return CandidateQuality {
+            category: "blocked".into(),
+            confidence: "blocked".into(),
+            is_blocked: true,
+            block_reason: Some(
+                "System command, scripting, and CLI tools cannot be registered as normal apps."
+                    .into(),
+            ),
+        };
+    }
+
+    let haystack = format!(
+        "{} {} {} {}",
+        name,
+        executable_path,
+        file_name,
+        publisher.unwrap_or("")
+    )
+    .to_ascii_lowercase();
+
+    if contains_any(
+        &haystack,
+        &[
+            "uninstall",
+            "unins",
+            "setup",
+            "installer",
+            " install ",
+            "bootstrapper",
+            "update helper",
+            "updater",
+            "repair",
+            "modify",
+            "remove",
+            "redist",
+            "redistributable",
+            "runtime installer",
+            "package cache",
+            "vc_redist",
+            "vcredist",
+            "winsdksetup",
+        ],
+    ) {
+        return unsupported_quality("Installers, uninstallers, update helpers, and redistributables are hidden from normal app suggestions.");
+    }
+
+    if contains_any(
+        &haystack,
+        &[
+            "adminserver",
+            "admin server",
+            "update service",
+            "package manager server",
+            "telemetry",
+            "diagnostic",
+            "iediag",
+            "system repair",
+            "service helper",
+            "teamsupdate",
+            "windows packagemanager",
+            "windowspackagemanagerserver",
+        ],
+    ) {
+        return unsupported_quality("System, service, diagnostic, and admin helper executables are not normal app suggestions.");
+    }
+
+    if contains_any(
+        &haystack,
+        &[
+            "sdk",
+            "runtime",
+            "command line",
+            " cli",
+            "developer tool command",
+            "\\package cache\\",
+            "\\windows kits\\",
+            "\\windows\\system32\\",
+            "\\windows\\syswow64\\",
+        ],
+    ) && !is_known_user_app(&haystack)
+    {
+        return CandidateQuality {
+            category: "advanced".into(),
+            confidence: "advanced".into(),
+            is_blocked: false,
+            block_reason: Some("Technical helper or developer/runtime component.".into()),
+        };
+    }
+
+    if is_known_user_app(&haystack) || source_confidence == "high" {
+        return CandidateQuality {
+            category: "recommended".into(),
+            confidence: if is_known_user_app(&haystack) {
+                "recommended".into()
+            } else {
+                source_confidence.into()
+            },
+            is_blocked: false,
+            block_reason: None,
+        };
+    }
+
+    CandidateQuality {
+        category: "advanced".into(),
+        confidence: "advanced".into(),
+        is_blocked: false,
+        block_reason: Some("Less common app suggestion. Review the path before adding.".into()),
+    }
+}
+
+fn unsupported_quality(reason: &str) -> CandidateQuality {
+    CandidateQuality {
+        category: "unsupported".into(),
+        confidence: "unsupported".into(),
+        is_blocked: true,
+        block_reason: Some(reason.into()),
+    }
+}
+
+fn contains_any(value: &str, needles: &[&str]) -> bool {
+    needles.iter().any(|needle| value.contains(needle))
+}
+
+fn is_known_user_app(value: &str) -> bool {
+    contains_any(
+        value,
+        &[
+            "google chrome",
+            "chrome.exe",
+            "microsoft edge",
+            "msedge.exe",
+            "visual studio code",
+            "code.exe",
+            "slack",
+            "figma",
+            "obs studio",
+            "obs64.exe",
+            "anydesk",
+            "notepad",
+            "paint",
+            "mspaint",
+            "microsoft teams",
+            "teams.exe",
+            "outlook",
+            "olk.exe",
+            "winrar",
+            "bibleshow",
+            "open design",
+            "gameloop",
+            "snipping tool",
+            "snippingtool",
+            "zoom",
+            "firefox",
+            "brave",
+            "word",
+            "excel",
+            "powerpoint",
+            "onenote",
+            "notion",
+            "obsidian",
+            "adobe acrobat",
+            "spotify",
+            "vlc",
+        ],
+    )
+}
+
+fn category_rank(value: &str) -> u8 {
+    match value {
+        "recommended" => 0,
+        "already_registered" => 1,
+        "advanced" => 2,
+        "unsupported" => 3,
+        "blocked" => 4,
+        _ => 5,
+    }
+}
+
+#[cfg(windows)]
+fn cached_app_icon_path(executable_path: &Path, candidate_id: &str) -> Option<String> {
+    let mut icon_dir = std::env::temp_dir();
+    icon_dir.push("klak");
+    icon_dir.push("app-icons");
+    fs::create_dir_all(&icon_dir).ok()?;
+    let icon_path = icon_dir.join(format!("{candidate_id}.png"));
+    if icon_path.is_file() {
+        return Some(icon_path.to_string_lossy().to_string());
+    }
+    let bytes = systemicons::get_icon(&executable_path.to_string_lossy(), 64).ok()?;
+    if bytes.is_empty() || bytes.len() > 512_000 {
+        return None;
+    }
+    fs::write(&icon_path, bytes).ok()?;
+    Some(icon_path.to_string_lossy().to_string())
+}
+
+#[cfg(not(windows))]
+fn cached_app_icon_path(_executable_path: &Path, _candidate_id: &str) -> Option<String> {
+    None
+}
+
 fn clean_display_name(value: &str, fallback_file_name: &str) -> String {
     let cleaned = value
         .trim()
@@ -1037,6 +1352,48 @@ fn clean_display_name(value: &str, fallback_file_name: &str) -> String {
         display_name_from_exe(fallback_file_name)
     } else {
         cleaned
+    }
+}
+
+fn normalize_display_name(
+    value: &str,
+    fallback_file_name: &str,
+    publisher: Option<&str>,
+) -> String {
+    let normalized = normalize_app_name(value);
+    let file_stem = Path::new(fallback_file_name)
+        .file_stem()
+        .and_then(|name| name.to_str())
+        .unwrap_or(fallback_file_name)
+        .to_ascii_lowercase();
+    match normalized.as_str() {
+        "msedge" | "microsoft edge" => "Microsoft Edge".into(),
+        "mspaint" | "paint" => "Paint".into(),
+        "olk" | "outlook" | "microsoft outlook" => "Outlook".into(),
+        "snippingtool" | "snipping tool" => "Snipping Tool".into(),
+        "ms teams" | "teams" | "microsoft teams" => "Microsoft Teams".into(),
+        "code" | "visual studio code"
+            if publisher
+                .unwrap_or("")
+                .to_ascii_lowercase()
+                .contains("microsoft") =>
+        {
+            "Visual Studio Code".into()
+        }
+        "store" | "microsoft store" => "Microsoft Store".into(),
+        "iexplore" | "internet explorer" => "Internet Explorer".into(),
+        "chrome" | "google chrome" => "Google Chrome".into(),
+        _ => match file_stem.as_str() {
+            "msedge" => "Microsoft Edge".into(),
+            "mspaint" => "Paint".into(),
+            "olk" => "Outlook".into(),
+            "snippingtool" => "Snipping Tool".into(),
+            "teams" | "ms-teams" => "Microsoft Teams".into(),
+            "code" => "Visual Studio Code".into(),
+            "chrome" => "Google Chrome".into(),
+            "iexplore" => "Internet Explorer".into(),
+            _ => value.trim().to_string(),
+        },
     }
 }
 

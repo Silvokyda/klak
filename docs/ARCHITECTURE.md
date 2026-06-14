@@ -56,7 +56,7 @@ Structured project and workflow memory lives beside the general memory table. `s
 
 Registered apps live in `registered_apps` through `src/lib/apps/registeredAppsRepository.ts`. Records store a user-approved executable path, app type, allowed state, and launch timestamp.
 
-App discovery is transient. The native `scan_installed_apps` command reads bounded Windows registry sources, returns current suggestions, and does not persist candidates. The frontend shows suggestions for user selection. Before saving, `register_discovered_apps` rechecks selected suggestions against a fresh bounded scan and native launch validation, then the existing registered app repository persists only accepted apps.
+App discovery is transient. The native `scan_installed_apps` command reads bounded Windows registry sources, returns current suggestions, and does not persist candidates. Discovery classifies candidates as `recommended`, `already_registered`, `advanced`, `unsupported`, or `blocked`, normalizes common display names, filters installer/uninstaller/update-helper noise away from normal suggestions, and extracts a cached PNG icon for user-facing apps when Windows exposes one. The frontend shows recommended apps first and hides advanced/unsupported candidates behind a toggle. Before saving, `register_discovered_apps` rechecks selected suggestions against a fresh bounded scan, candidate quality classification, and native launch validation, then the existing registered app repository persists only accepted apps.
 
 Command templates live in `command_templates` through `src/lib/commands/commandTemplateRepository.ts`. They store saved finite commands, project links, allowed working directories, risk, timeout, run count, and a short last-result summary.
 

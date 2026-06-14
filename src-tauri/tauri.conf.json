@@ -22,7 +22,13 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": "default-src 'self' ipc: http://ipc.localhost; img-src 'self' asset: http://asset.localhost data: blob:",
+      "assetProtocol": {
+        "enable": true,
+        "scope": [
+          "C:\\Users\\silvance\\AppData\\Local\\Temp\\klak\\app-icons\\**\\*"
+        ]
+      }
     }
   },
   "bundle": {
@@ -32,7 +38,9 @@
   },
   "plugins": {
     "sql": {
-      "preload": ["sqlite:klak.db"]
+      "preload": [
+        "sqlite:klak.db"
+      ]
     }
   }
 }
