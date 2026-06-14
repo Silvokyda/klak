@@ -67,6 +67,14 @@ export const initialTools: ToolDefinition[] = [
     future: false
   },
   {
+    name: "start_background_process",
+    label: "Start Background Process",
+    description: "Start an approved long-running command template as a Klak-managed process.",
+    riskLevel: "high",
+    enabled: true,
+    future: false
+  },
+  {
     name: "browser_automation",
     label: "Browser Automation",
     description: "Future controlled browser workflows.",

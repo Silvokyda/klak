@@ -14,7 +14,7 @@ Memories are stored in the local SQLite `memories` table in the Tauri app. Brows
 - `document`: user-approved document context.
 - `command_history`: user-approved command or workflow history.
 
-Projects, workflows, registered apps, and command templates also have dedicated local tables. Use `project` and `workflow` memories for narrative facts and user preferences; use the structured records for repository path, status, trigger phrase, workflow steps, startup workflow links, approved app paths, and approved command templates.
+Projects, workflows, registered apps, command templates, and background processes also have dedicated local tables. Use `project` and `workflow` memories for narrative facts and user preferences; use the structured records for repository path, status, trigger phrase, workflow steps, startup workflow links, approved app paths, approved command templates, and process status.
 
 ## When To Save Memory
 
@@ -57,5 +57,7 @@ Workflow records are managed by `src/lib/workflows/workflowRepository.ts` and st
 Registered app records are managed by `src/lib/apps/registeredAppsRepository.ts`. They are structured local memory for approved apps, not command history and not a shell.
 
 Command template records are managed by `src/lib/commands/commandTemplateRepository.ts`. They are structured local memory for approved finite commands, working directories, risk, timeout, and last run summary. They are not raw terminal history.
+
+Background process records are managed by `src/lib/processes/backgroundProcessRepository.ts`. They are operational state for Klak-managed child processes and bounded output previews, not arbitrary process history.
 
 Assistant requests include relevant memories, projects, workflow summaries, registered app summaries, and command template summaries. Saved workflow trigger phrases are detected locally; the assistant points the user to the Workflows or Projects screen for preview and confirmation rather than running workflows silently.

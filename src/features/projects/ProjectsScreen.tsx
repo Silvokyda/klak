@@ -1,10 +1,12 @@
+import { invoke } from "@tauri-apps/api/core";
 import { ClipboardList, FilePlus, FolderOpen, Play, Plus, Trash2 } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 import { ActionPreviewCard } from "../../components/ActionPreviewCard";
 import { ScreenHeader } from "../../components/ScreenHeader";
-import type { ActionPreview, AppSettings, CommandTemplateRecord, ProjectRecord, ProjectStatus, ProjectType, WorkflowRecord } from "../../types";
+import type { ActionPreview, AppSettings, BackgroundProcessRecord, CommandTemplateRecord, ProjectRecord, ProjectStatus, ProjectType, WorkflowRecord } from "../../types";
 import { buildActionPreviewForSuggestion } from "../../lib/tools/toolProposals";
 import { createCommandTemplate, listCommandTemplates } from "../../lib/commands/commandTemplateRepository";
+import { listBackgroundProcesses, markProcessStopped } from "../../lib/processes/backgroundProcessRepository";
 import { createProject, deleteProject, listProjects, touchProject, updateProject } from "../../lib/projects/projectRepository";
 import { listWorkflows, previewWorkflow, runWorkflow } from "../../lib/workflows/workflowRepository";
 
@@ -15,6 +17,7 @@ export function ProjectsScreen({ settings }: { settings: AppSettings }) {
   const [projects, setProjects] = useState<ProjectRecord[]>([]);
   const [workflows, setWorkflows] = useState<WorkflowRecord[]>([]);
   const [commands, setCommands] = useState<CommandTemplateRecord[]>([]);
+  const [processes, setProcesses] = useState<BackgroundProcessRecord[]>([]);
   const [status, setStatus] = useState<ProjectStatus | "all">("all");
   const [preview, setPreview] = useState<ActionPreview | null>(null);
   const [message, setMessage] = useState<string | null>(null);
@@ -36,14 +39,16 @@ export function ProjectsScreen({ settings }: { settings: AppSettings }) {
   const workflowName = useMemo(() => new Map(workflows.map((workflow) => [workflow.id, workflow.name])), [workflows]);
 
   async function refresh() {
-    const [nextProjects, nextWorkflows, nextCommands] = await Promise.all([
+    const [nextProjects, nextWorkflows, nextCommands, nextProcesses] = await Promise.all([
       listProjects(status === "all" ? {} : { status }),
       listWorkflows(),
-      listCommandTemplates()
+      listCommandTemplates(),
+      listBackgroundProcesses()
     ]);
     setProjects(nextProjects);
     setWorkflows(nextWorkflows);
     setCommands(nextCommands);
+    setProcesses(nextProcesses);
   }
 
   useEffect(() => {
@@ -142,8 +147,19 @@ export function ProjectsScreen({ settings }: { settings: AppSettings }) {
   }
 
   async function runCommand(command: CommandTemplateRecord) {
-    const nextPreview = await buildActionPreviewForSuggestion({ toolName: "run_command_template", input: { command_template_id: command.id } }, settings);
+    const nextPreview = await buildActionPreviewForSuggestion({
+      toolName: command.is_long_running ? "start_background_process" : "run_command_template",
+      input: { command_template_id: command.id }
+    }, settings);
     if (nextPreview) setPreview(nextPreview);
+  }
+
+  async function stopProjectProcess(process: BackgroundProcessRecord) {
+    const status = await invoke<{ status: string; exit_code: number | null }>("stop_background_process", {
+      input: { process_id: process.id }
+    });
+    await markProcessStopped(process.id, { status: status.status as BackgroundProcessRecord["status"], exit_code: status.exit_code, last_output_preview: "Stop requested from project screen." });
+    await refresh();
   }
 
   return (
@@ -203,7 +219,14 @@ export function ProjectsScreen({ settings }: { settings: AppSettings }) {
               <div className="mini-list">
                 {(commands.filter((command) => command.project_id === project.id)).map((command) => (
                   <button key={command.id} title={`Run ${command.name}`} disabled={!command.enabled} onClick={() => runCommand(command)}>
-                    {command.name}
+                    {command.is_long_running ? `Start ${command.name}` : command.name}
+                  </button>
+                ))}
+              </div>
+              <div className="mini-list">
+                {(processes.filter((process) => process.project_id === project.id && ["starting", "running"].includes(process.status))).map((process) => (
+                  <button key={process.id} title={`Stop ${process.name}`} onClick={() => stopProjectProcess(process)}>
+                    {process.name}: {process.status}
                   </button>
                 ))}
               </div>

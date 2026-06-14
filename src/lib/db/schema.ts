@@ -86,11 +86,33 @@ CREATE TABLE IF NOT EXISTS command_templates (
   enabled INTEGER DEFAULT 1,
   requires_confirmation INTEGER DEFAULT 1,
   timeout_seconds INTEGER DEFAULT 120,
+  is_long_running INTEGER DEFAULT 0,
+  allow_background_run INTEGER DEFAULT 0,
+  max_runtime_seconds INTEGER,
+  auto_stop_on_app_exit INTEGER DEFAULT 1,
   created_at TEXT NOT NULL,
   updated_at TEXT NOT NULL,
   last_run_at TEXT,
   run_count INTEGER DEFAULT 0,
   last_result_summary TEXT
+);
+
+CREATE TABLE IF NOT EXISTS background_processes (
+  id TEXT PRIMARY KEY,
+  command_template_id TEXT NOT NULL,
+  project_id TEXT,
+  name TEXT NOT NULL,
+  command TEXT NOT NULL,
+  working_directory TEXT NOT NULL,
+  status TEXT NOT NULL,
+  process_pid INTEGER,
+  started_at TEXT NOT NULL,
+  stopped_at TEXT,
+  exit_code INTEGER,
+  last_output_preview TEXT,
+  output_log_path TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
 );
 
 CREATE TABLE IF NOT EXISTS workflows (

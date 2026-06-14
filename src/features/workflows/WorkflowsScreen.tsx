@@ -8,7 +8,7 @@ import { listProjects } from "../../lib/projects/projectRepository";
 import { listAllowedFolders } from "../../lib/storage/allowedFoldersRepository";
 import { createWorkflow, deleteWorkflow, listWorkflows, parseWorkflowSteps, previewWorkflow, runWorkflow, updateWorkflow, validateWorkflowSteps } from "../../lib/workflows/workflowRepository";
 
-const supportedStepTypes: WorkflowStepType[] = ["open_url", "open_folder", "launch_app", "run_command_template", "create_note", "copy_to_clipboard", "search_memory", "create_memory", "manual_instruction"];
+const supportedStepTypes: WorkflowStepType[] = ["open_url", "open_folder", "launch_app", "run_command_template", "start_background_process", "create_note", "copy_to_clipboard", "search_memory", "create_memory", "manual_instruction"];
 
 const templateSteps: WorkflowStep[] = [
   { type: "search_memory", label: "Search related memory", input: { query: "project status" } },
@@ -259,6 +259,14 @@ function StepFields({ step, index, folders, apps, commands, onInput }: {
       </select>
     );
   }
+  if (step.type === "start_background_process") {
+    return (
+      <select value={String(step.input.command_template_id ?? "")} onChange={(event) => onInput(index, { command_template_id: event.target.value })}>
+        <option value="">Select long-running command template</option>
+        {commands.filter((command) => command.is_long_running && command.allow_background_run).map((command) => <option key={command.id} value={command.id}>{command.name}</option>)}
+      </select>
+    );
+  }
   if (step.type === "create_note") {
     return (
       <div className="form-grid">
@@ -298,6 +306,7 @@ function defaultStep(type: WorkflowStepType): WorkflowStep {
   if (type === "open_folder") return { type, label: "", input: { path: "" } };
   if (type === "launch_app") return { type, label: "", input: { registered_app_id: "" } };
   if (type === "run_command_template") return { type, label: "", input: { command_template_id: "" } };
+  if (type === "start_background_process") return { type, label: "", input: { command_template_id: "" } };
   if (type === "create_note") return { type, label: "", input: { destinationFolder: "", title: "", content: "" } };
   if (type === "copy_to_clipboard") return { type, label: "", input: { text: "" } };
   if (type === "search_memory") return { type, label: "", input: { query: "" } };
@@ -308,12 +317,13 @@ function defaultStep(type: WorkflowStepType): WorkflowStep {
 function describeStep(step: WorkflowStep, apps: RegisteredAppRecord[]): string {
   if (step.type === "launch_app") return `launch ${apps.find((app) => app.id === step.input.registered_app_id)?.name ?? "registered app"}`;
   if (step.type === "run_command_template") return "run saved command template";
+  if (step.type === "start_background_process") return "start saved background process";
   if (step.type === "manual_instruction") return String(step.input.text ?? "manual instruction");
   return `${step.type.replace(/_/g, " ")} ${JSON.stringify(step.input)}`;
 }
 
 function stepRisk(type: WorkflowStepType) {
-  if (type === "run_command_template") return "high";
+  if (type === "run_command_template" || type === "start_background_process") return "high";
   return ["open_folder", "launch_app", "create_note", "copy_to_clipboard", "create_memory"].includes(type) ? "medium" : "low";
 }
 

@@ -139,6 +139,10 @@ export interface CommandTemplateRecord {
   enabled: boolean;
   requires_confirmation: boolean;
   timeout_seconds: number;
+  is_long_running: boolean;
+  allow_background_run: boolean;
+  max_runtime_seconds?: number | null;
+  auto_stop_on_app_exit: boolean;
   created_at: string;
   updated_at: string;
   last_run_at?: string | null;
@@ -146,11 +150,32 @@ export interface CommandTemplateRecord {
   last_result_summary?: string | null;
 }
 
+export type BackgroundProcessStatus = "starting" | "running" | "stopped" | "exited" | "failed" | "killed" | "blocked";
+
+export interface BackgroundProcessRecord {
+  id: string;
+  command_template_id: string;
+  project_id?: string | null;
+  name: string;
+  command: string;
+  working_directory: string;
+  status: BackgroundProcessStatus;
+  process_pid?: number | null;
+  started_at: string;
+  stopped_at?: string | null;
+  exit_code?: number | null;
+  last_output_preview?: string | null;
+  output_log_path?: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
 export type WorkflowStepType =
   | "open_url"
   | "open_folder"
   | "launch_app"
   | "run_command_template"
+  | "start_background_process"
   | "create_note"
   | "copy_to_clipboard"
   | "search_memory"
@@ -194,6 +219,7 @@ export interface AIRequest {
   relevantWorkflows?: WorkflowRecord[];
   relevantRegisteredApps?: RegisteredAppRecord[];
   relevantCommandTemplates?: CommandTemplateRecord[];
+  relevantBackgroundProcesses?: BackgroundProcessRecord[];
   currentPermissionMode: PermissionMode;
   availableTools: ToolDefinition[];
   recentActionLogs: ActionLog[];

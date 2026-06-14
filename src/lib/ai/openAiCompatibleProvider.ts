@@ -58,6 +58,13 @@ export class OpenAICompatibleProvider implements AIProvider {
                 riskLevel: command.risk_level,
                 enabled: command.enabled
               })),
+              backgroundProcesses: (input.relevantBackgroundProcesses ?? []).map((process) => ({
+                id: process.id,
+                name: process.name,
+                projectId: process.project_id,
+                status: process.status,
+                pid: process.process_pid
+              })),
               permissionMode: input.currentPermissionMode,
               availableTools: input.availableTools.map((tool) => ({
                 name: tool.name,

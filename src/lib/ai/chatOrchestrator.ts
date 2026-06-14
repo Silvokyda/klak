@@ -6,16 +6,18 @@ import { OpenAICompatibleProvider } from "./openAiCompatibleProvider";
 import { localContextCollector } from "../context/localContext";
 import { searchRegisteredApps } from "../apps/registeredAppsRepository";
 import { isLongRunningCommand, searchCommandTemplates } from "../commands/commandTemplateRepository";
+import { listRunningBackgroundProcesses } from "../processes/backgroundProcessRepository";
 import { searchProjects } from "../projects/projectRepository";
 import { searchWorkflows } from "../workflows/workflowRepository";
 
 export async function sendChatMessage(userMessage: string, settings: AppSettings): Promise<AIResponse> {
-  const [relevantMemories, relevantProjects, relevantWorkflows, relevantRegisteredApps, relevantCommandTemplates, availableTools, recentActionLogs, localContext] = await Promise.all([
+  const [relevantMemories, relevantProjects, relevantWorkflows, relevantRegisteredApps, relevantCommandTemplates, runningProcesses, availableTools, recentActionLogs, localContext] = await Promise.all([
     searchMemories(userMessage),
     searchProjects(userMessage),
     searchWorkflows(userMessage),
     searchRegisteredApps(userMessage),
     searchCommandTemplates(userMessage),
+    listRunningBackgroundProcesses(),
     listTools(settings.allToolsDisabled),
     listActionLogs(),
     settings.localContextEnabled ? localContextCollector.collect() : Promise.resolve({})
@@ -30,6 +32,20 @@ export async function sendChatMessage(userMessage: string, settings: AppSettings
   if (/\b(save|remember)\b.+\bas (?:a )?command\b/i.test(userMessage)) {
     return {
       message: "I can save that as a command template, but I need the project and an allowed working directory first. Add it in Commands so Klak can validate it before any run."
+    };
+  }
+
+  if (/\bwhat(?:'s| is)? running\b/i.test(userMessage)) {
+    return {
+      message: runningProcesses.length
+        ? `Klak is managing these background processes: ${runningProcesses.map((process) => `${process.name} (${process.status})`).join(", ")}.`
+        : "Klak is not managing any running background processes right now."
+    };
+  }
+
+  if (/^\s*(kill|stop)\s+/i.test(userMessage) && /\b(node|cargo|npm|php|flutter|process)\b/i.test(userMessage)) {
+    return {
+      message: "I can only stop background processes that Klak started from approved templates. Open Processes to stop a Klak-managed process."
     };
   }
 
@@ -49,6 +65,12 @@ export async function sendChatMessage(userMessage: string, settings: AppSettings
     const command = relevantCommandTemplates.find((item) => item.enabled && item.name.toLowerCase().includes(runCommandRequest));
     if (command) {
       if (isLongRunningCommand(command.command)) {
+        if (command.is_long_running && command.allow_background_run) {
+          return {
+            message: `I found the long-running command template "${command.name}". Review the action preview before it starts as a background process.`,
+            suggestedAction: { toolName: "start_background_process", input: { command_template_id: command.id } }
+          };
+        }
         return {
           message: "That saved command looks long-running. Background process management is not implemented yet, so run it manually or add it as a manual workflow instruction for now."
         };
@@ -164,6 +186,7 @@ export async function sendChatMessage(userMessage: string, settings: AppSettings
     relevantWorkflows: relevantWorkflows.slice(0, 5),
     relevantRegisteredApps: relevantRegisteredApps.slice(0, 5),
     relevantCommandTemplates: relevantCommandTemplates.slice(0, 5),
+    relevantBackgroundProcesses: runningProcesses.slice(0, 5),
     currentPermissionMode: settings.permissionMode,
     availableTools,
     recentActionLogs: recentActionLogs.slice(0, 10),

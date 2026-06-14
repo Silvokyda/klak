@@ -25,6 +25,7 @@ SQLite stores:
 - `workflows`
 - `registered_apps`
 - `command_templates`
+- `background_processes`
 - `action_logs`
 - `app_settings`
 - `tool_settings`
@@ -57,6 +58,8 @@ Registered apps live in `registered_apps` through `src/lib/apps/registeredAppsRe
 
 Command templates live in `command_templates` through `src/lib/commands/commandTemplateRepository.ts`. They store saved finite commands, project links, allowed working directories, risk, timeout, run count, and a short last-result summary.
 
+Background process records live in `background_processes` through `src/lib/processes/backgroundProcessRepository.ts`. They store the command template, project link, PID, status, output preview, and bounded output log path for Klak-managed long-running commands.
+
 ## Tool System
 
 Tools are declared in `src/lib/tools/toolRegistry.ts`. Safe MVP tools are enabled where appropriate. Dangerous or future tools are present as disabled extension points:
@@ -75,6 +78,7 @@ Implemented safe tools:
 - `open_folder`: opens only folders in `allowed_folders`.
 - `launch_app`: launches only a locally registered and allowed `.exe`, with no shell and no arbitrary arguments.
 - `run_command_template`: runs only a saved, enabled command template from an allowed working directory, after safety validation and approval.
+- `start_background_process`: starts only an approved long-running command template as a Klak-managed child process.
 - `create_note`: writes Markdown notes only inside allowed folders and refuses overwrites.
 - `copy_to_clipboard`: writes clipboard text only after approval and never reads clipboard automatically.
 - `search_memory`: searches local memory and logs the query summary.
@@ -84,7 +88,9 @@ Workflows do not add new execution powers. They are ordered collections of the i
 
 The native `launch_registered_app` command validates that the executable exists, is a `.exe`, is not a blocked shell or terminal executable, and starts it with `std::process::Command` without shell interpolation or custom arguments.
 
-The native `run_command_template` command validates the working directory, splits the saved command into executable and arguments, maps Windows shims such as `npm` to `npm.cmd`, runs without shell interpolation, captures stdout/stderr, truncates output, and enforces a timeout. It does not provide background process management.
+The native `run_command_template` command validates the working directory, splits the saved command into executable and arguments, maps Windows shims such as `npm` to `npm.cmd`, runs without shell interpolation, captures stdout/stderr, truncates output, and enforces a timeout.
+
+The native background process manager keeps an in-memory registry of children started in the current app session. `start_background_process` spawns the saved command, streams stdout/stderr to a bounded local log file, and returns PID/status. `stop_background_process` and status reads only operate on children in that registry, so Klak does not kill arbitrary system processes.
 
 ## Secrets
 

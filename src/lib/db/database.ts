@@ -30,6 +30,18 @@ export async function initDatabase(): Promise<void> {
   } catch {
     // Existing databases may already have the column.
   }
+  for (const statement of [
+    "ALTER TABLE command_templates ADD COLUMN is_long_running INTEGER DEFAULT 0",
+    "ALTER TABLE command_templates ADD COLUMN allow_background_run INTEGER DEFAULT 0",
+    "ALTER TABLE command_templates ADD COLUMN max_runtime_seconds INTEGER",
+    "ALTER TABLE command_templates ADD COLUMN auto_stop_on_app_exit INTEGER DEFAULT 1"
+  ]) {
+    try {
+      await db.execute(statement);
+    } catch {
+      // Existing databases may already have these columns.
+    }
+  }
 }
 
 export async function getDatabase(): Promise<DbAdapter> {
@@ -48,6 +60,7 @@ export async function resetLocalDatabase(): Promise<void> {
   await db.execute("DELETE FROM workflows");
   await db.execute("DELETE FROM registered_apps");
   await db.execute("DELETE FROM command_templates");
+  await db.execute("DELETE FROM background_processes");
 }
 
 async function createAdapter(): Promise<DbAdapter> {
@@ -82,6 +95,7 @@ function createInsecureDevDatabase(): DbAdapter {
     workflows: Row[];
     registered_apps: Row[];
     command_templates: Row[];
+    background_processes: Row[];
     schema_migrations: Row[];
   };
 
@@ -95,6 +109,7 @@ function createInsecureDevDatabase(): DbAdapter {
     workflows: [],
     registered_apps: [],
     command_templates: [],
+    background_processes: [],
     schema_migrations: []
   });
 
@@ -131,8 +146,11 @@ function createInsecureDevDatabase(): DbAdapter {
         const template = state.command_templates.find((row) => row.id === id);
         updateById(state.command_templates, id, { last_run_at: bindValues[0], last_result_summary: bindValues[1], run_count: Number(template?.run_count ?? 0) + 1 });
       }
-      else if (normalized.startsWith("UPDATE COMMAND_TEMPLATES")) updateById(state.command_templates, String(bindValues[11]), commandTemplatePatch(bindValues));
+      else if (normalized.startsWith("UPDATE COMMAND_TEMPLATES")) updateById(state.command_templates, String(bindValues[15]), commandTemplatePatch(bindValues));
       else if (normalized.startsWith("DELETE FROM COMMAND_TEMPLATES")) removeById(state.command_templates, String(bindValues[0]));
+      else if (normalized.startsWith("INSERT INTO BACKGROUND_PROCESSES")) upsert(state.background_processes, backgroundProcessRow(bindValues));
+      else if (normalized.startsWith("UPDATE BACKGROUND_PROCESSES")) updateById(state.background_processes, String(bindValues[9]), backgroundProcessPatch(bindValues));
+      else if (normalized.startsWith("DELETE FROM BACKGROUND_PROCESSES")) removeById(state.background_processes, String(bindValues[0]));
       else if (normalized.startsWith("INSERT INTO WORKFLOWS")) upsert(state.workflows, workflowRow(bindValues));
       else if (normalized.startsWith("UPDATE WORKFLOWS SET LAST_RUN_AT")) {
         const id = String(bindValues[1]);
@@ -161,6 +179,7 @@ function createInsecureDevDatabase(): DbAdapter {
       else if (normalized.includes("FROM WORKFLOWS")) rows = selectWorkflows(state.workflows, normalized, bindValues);
       else if (normalized.includes("FROM REGISTERED_APPS")) rows = selectRegisteredApps(state.registered_apps, normalized, bindValues);
       else if (normalized.includes("FROM COMMAND_TEMPLATES")) rows = selectCommandTemplates(state.command_templates, normalized, bindValues);
+      else if (normalized.includes("FROM BACKGROUND_PROCESSES")) rows = selectBackgroundProcesses(state.background_processes, normalized, bindValues);
       return rows as T[];
     }
   };
@@ -239,13 +258,23 @@ function registeredAppPatch(values: BindValue[]): Row {
 }
 
 function commandTemplateRow(values: BindValue[]): Row {
-  const [id, project_id, name, description, command, working_directory, command_type, risk_level, enabled, requires_confirmation, timeout_seconds, created_at, updated_at, last_run_at, run_count, last_result_summary] = values;
-  return { id, project_id, name, description, command, working_directory, command_type, risk_level, enabled, requires_confirmation, timeout_seconds, created_at, updated_at, last_run_at, run_count, last_result_summary };
+  const [id, project_id, name, description, command, working_directory, command_type, risk_level, enabled, requires_confirmation, timeout_seconds, is_long_running, allow_background_run, max_runtime_seconds, auto_stop_on_app_exit, created_at, updated_at, last_run_at, run_count, last_result_summary] = values;
+  return { id, project_id, name, description, command, working_directory, command_type, risk_level, enabled, requires_confirmation, timeout_seconds, is_long_running, allow_background_run, max_runtime_seconds, auto_stop_on_app_exit, created_at, updated_at, last_run_at, run_count, last_result_summary };
 }
 
 function commandTemplatePatch(values: BindValue[]): Row {
-  const [project_id, name, description, command, working_directory, command_type, risk_level, enabled, requires_confirmation, timeout_seconds, updated_at] = values;
-  return { project_id, name, description, command, working_directory, command_type, risk_level, enabled, requires_confirmation, timeout_seconds, updated_at };
+  const [project_id, name, description, command, working_directory, command_type, risk_level, enabled, requires_confirmation, timeout_seconds, is_long_running, allow_background_run, max_runtime_seconds, auto_stop_on_app_exit, updated_at] = values;
+  return { project_id, name, description, command, working_directory, command_type, risk_level, enabled, requires_confirmation, timeout_seconds, is_long_running, allow_background_run, max_runtime_seconds, auto_stop_on_app_exit, updated_at };
+}
+
+function backgroundProcessRow(values: BindValue[]): Row {
+  const [id, command_template_id, project_id, name, command, working_directory, status, process_pid, started_at, stopped_at, exit_code, last_output_preview, output_log_path, created_at, updated_at] = values;
+  return { id, command_template_id, project_id, name, command, working_directory, status, process_pid, started_at, stopped_at, exit_code, last_output_preview, output_log_path, created_at, updated_at };
+}
+
+function backgroundProcessPatch(values: BindValue[]): Row {
+  const [status, process_pid, stopped_at, exit_code, last_output_preview, output_log_path, updated_at, name, command, id] = values;
+  return { status, process_pid, stopped_at, exit_code, last_output_preview, output_log_path, updated_at, name, command, id };
 }
 
 function workflowRow(values: BindValue[]): Row {
@@ -324,6 +353,15 @@ function selectCommandTemplates(rows: Row[], sql: string, values: BindValue[]): 
     result = result.filter((row) => `${row.name} ${row.description} ${row.command} ${row.working_directory} ${row.command_type}`.toLowerCase().includes(query));
   } else if (sql.includes("PROJECT_ID =")) result = result.filter((row) => row.project_id === values[0]);
   else if (sql.includes("ENABLED =")) result = result.filter((row) => row.enabled === values[0]);
+  return result.sort((a, b) => Date.parse(String(b.updated_at)) - Date.parse(String(a.updated_at)));
+}
+
+function selectBackgroundProcesses(rows: Row[], sql: string, values: BindValue[]): Row[] {
+  let result = [...rows];
+  if (sql.includes("WHERE ID =")) result = result.filter((row) => row.id === values[0]);
+  else if (sql.includes("COMMAND_TEMPLATE_ID =")) result = result.filter((row) => row.command_template_id === values[0]);
+  else if (sql.includes("PROJECT_ID =")) result = result.filter((row) => row.project_id === values[0]);
+  else if (sql.includes("STATUS IN")) result = result.filter((row) => ["starting", "running"].includes(String(row.status)));
   return result.sort((a, b) => Date.parse(String(b.updated_at)) - Date.parse(String(a.updated_at)));
 }
 

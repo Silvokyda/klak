@@ -64,6 +64,7 @@ In the native Tauri app, `secretStore` calls Rust commands backed by the `keyrin
 - `open_folder` allows only folders already present in `allowed_folders`.
 - `launch_app` allows only registered, enabled `.exe` applications and uses a native direct spawn without shell interpolation.
 - `run_command_template` allows only saved finite command templates from allowed folders and uses preview, approval, timeout, and output truncation.
+- `start_background_process` allows only saved long-running command templates that explicitly opt into background runs.
 - `create_note` writes only inside allowed folders and refuses to overwrite existing files.
 - `copy_to_clipboard` writes text only after user approval and never reads clipboard automatically.
 - `search_memory` searches local memory and should avoid logging raw sensitive queries.
@@ -100,6 +101,15 @@ Command templates are controlled local actions, not raw terminal access.
 - Stdout and stderr are captured, truncated, and summarized; huge raw logs are not stored permanently.
 
 Windows commands such as `npm run build` may use a constrained executable shim like `npm.cmd`, but Klak still does not interpolate through a user-controlled shell command string.
+
+## Background Process Rules
+
+- Long-running templates must be explicitly marked and require confirmation.
+- Duplicate running processes for the same template are blocked.
+- Output is written to a bounded local log file and only recent output is shown.
+- Stop controls operate only on Klak-managed children from the current app session.
+- Klak refuses arbitrary requests such as "kill node" because that could terminate unrelated system processes.
+- Stale process records are reconciled on app start; Klak marks them stopped or exited rather than guessing which system process to kill.
 
 ## Voice Rules
 

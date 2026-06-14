@@ -18,6 +18,7 @@
 - Diagnostics screen
 - Controlled registered app launcher
 - Controlled command templates
+- Background process manager for approved long-running templates
 - Safer workflow builder UI
 - Project startup workflow links
 - Improved memory search

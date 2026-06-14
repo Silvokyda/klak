@@ -2,6 +2,7 @@ import type { AppSettings, ToolActionInput } from "../../types";
 import { createActionPreview } from "../permissions/policy";
 import { getRegisteredAppById, validateExecutablePath } from "../apps/registeredAppsRepository";
 import { getCommandTemplateById, isLongRunningCommand, validateCommandSafety } from "../commands/commandTemplateRepository";
+import { listRunningBackgroundProcesses } from "../processes/backgroundProcessRepository";
 import { listTools } from "./toolRegistry";
 import {
   assertAllowedFolder,
@@ -20,6 +21,9 @@ export async function buildActionPreviewForSuggestion(action: ToolActionInput, s
   try {
     const input = await normalizeInput(action, settings);
     if (action.toolName === "run_command_template" && typeof input.risk_level === "string") {
+      tool = { ...tool, riskLevel: input.risk_level as typeof tool.riskLevel };
+    }
+    if (action.toolName === "start_background_process" && typeof input.risk_level === "string") {
       tool = { ...tool, riskLevel: input.risk_level as typeof tool.riskLevel };
     }
     return createActionPreview(tool, input, settings);
@@ -95,6 +99,30 @@ async function normalizeInput(action: ToolActionInput, settings: AppSettings): P
       command_type: template.command_type,
       risk_level: template.risk_level,
       timeout_seconds: template.timeout_seconds
+    };
+  }
+  if (action.toolName === "start_background_process") {
+    const commandTemplateId = String(action.input.command_template_id ?? "");
+    const template = await getCommandTemplateById(commandTemplateId);
+    if (!template) throw new Error("Klak can only start saved command templates.");
+    if (!template.enabled) throw new Error("This command template is disabled.");
+    if (!template.is_long_running || !template.allow_background_run) throw new Error("This command template is not approved for background runs.");
+    validateCommandSafety(template.command);
+    await assertPathInsideAllowedFolder(template.working_directory, settings);
+    const running = await listRunningBackgroundProcesses();
+    if (running.some((process) => process.command_template_id === template.id)) {
+      throw new Error("A background process for this command template is already running.");
+    }
+    return {
+      command_template_id: template.id,
+      project_id: template.project_id ?? null,
+      command_name: template.name,
+      command: template.command,
+      working_directory: template.working_directory,
+      command_type: template.command_type,
+      risk_level: template.risk_level,
+      max_runtime_seconds: template.max_runtime_seconds ?? null,
+      auto_stop_on_app_exit: template.auto_stop_on_app_exit
     };
   }
   return action.input;

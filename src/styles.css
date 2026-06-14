@@ -311,7 +311,7 @@ textarea {
   gap: 8px;
 }
 
-.project-row, .workflow-row, .app-row, .command-row {
+.project-row, .workflow-row, .app-row, .command-row, .process-row {
   grid-template-columns: minmax(0, 1fr) auto;
 }
 

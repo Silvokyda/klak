@@ -13,6 +13,10 @@ export interface CommandTemplateInput {
   enabled?: boolean;
   requires_confirmation?: boolean;
   timeout_seconds?: number;
+  is_long_running?: boolean;
+  allow_background_run?: boolean;
+  max_runtime_seconds?: number | null;
+  auto_stop_on_app_exit?: boolean;
 }
 
 export interface CommandTemplateFilters {
@@ -44,6 +48,10 @@ export async function createCommandTemplate(input: CommandTemplateInput): Promis
     enabled: input.enabled ?? true,
     requires_confirmation: input.requires_confirmation ?? true,
     timeout_seconds: clampTimeout(input.timeout_seconds ?? 120),
+    is_long_running: input.is_long_running ?? isLongRunningCommand(input.command),
+    allow_background_run: input.allow_background_run ?? false,
+    max_runtime_seconds: input.max_runtime_seconds ?? null,
+    auto_stop_on_app_exit: input.auto_stop_on_app_exit ?? true,
     created_at: timestamp,
     updated_at: timestamp,
     last_run_at: null,
@@ -51,8 +59,8 @@ export async function createCommandTemplate(input: CommandTemplateInput): Promis
     last_result_summary: null
   };
   await db.execute(
-    `INSERT INTO command_templates (id, project_id, name, description, command, working_directory, command_type, risk_level, enabled, requires_confirmation, timeout_seconds, created_at, updated_at, last_run_at, run_count, last_result_summary)
-     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
+    `INSERT INTO command_templates (id, project_id, name, description, command, working_directory, command_type, risk_level, enabled, requires_confirmation, timeout_seconds, is_long_running, allow_background_run, max_runtime_seconds, auto_stop_on_app_exit, created_at, updated_at, last_run_at, run_count, last_result_summary)
+     VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`,
     [
       template.id,
       template.project_id ?? null,
@@ -65,6 +73,10 @@ export async function createCommandTemplate(input: CommandTemplateInput): Promis
       template.enabled ? 1 : 0,
       template.requires_confirmation ? 1 : 0,
       template.timeout_seconds,
+      template.is_long_running ? 1 : 0,
+      template.allow_background_run ? 1 : 0,
+      template.max_runtime_seconds ?? null,
+      template.auto_stop_on_app_exit ? 1 : 0,
       template.created_at,
       template.updated_at,
       template.last_run_at ?? null,
@@ -86,13 +98,17 @@ export async function updateCommandTemplate(templateId: string, input: Partial<C
     enabled: input.enabled ?? existing.enabled,
     requires_confirmation: input.requires_confirmation ?? existing.requires_confirmation,
     timeout_seconds: clampTimeout(input.timeout_seconds ?? existing.timeout_seconds),
+    is_long_running: input.is_long_running ?? existing.is_long_running,
+    allow_background_run: input.allow_background_run ?? existing.allow_background_run,
+    max_runtime_seconds: input.max_runtime_seconds ?? existing.max_runtime_seconds ?? null,
+    auto_stop_on_app_exit: input.auto_stop_on_app_exit ?? existing.auto_stop_on_app_exit,
     updated_at: nowIso()
   };
   validateCommandTemplateInput(updated);
   const db = await getDatabase();
   await db.execute(
     `UPDATE command_templates
-     SET project_id = ?, name = ?, description = ?, command = ?, working_directory = ?, command_type = ?, risk_level = ?, enabled = ?, requires_confirmation = ?, timeout_seconds = ?, updated_at = ?
+     SET project_id = ?, name = ?, description = ?, command = ?, working_directory = ?, command_type = ?, risk_level = ?, enabled = ?, requires_confirmation = ?, timeout_seconds = ?, is_long_running = ?, allow_background_run = ?, max_runtime_seconds = ?, auto_stop_on_app_exit = ?, updated_at = ?
      WHERE id = ?`,
     [
       updated.project_id ?? null,
@@ -105,6 +121,10 @@ export async function updateCommandTemplate(templateId: string, input: Partial<C
       updated.enabled ? 1 : 0,
       updated.requires_confirmation ? 1 : 0,
       updated.timeout_seconds,
+      updated.is_long_running ? 1 : 0,
+      updated.allow_background_run ? 1 : 0,
+      updated.max_runtime_seconds ?? null,
+      updated.auto_stop_on_app_exit ? 1 : 0,
       updated.updated_at,
       templateId
     ]
@@ -159,6 +179,8 @@ export function validateCommandTemplateInput(input: Pick<CommandTemplateInput, "
   if (!input.command.trim()) throw new Error("Command is required.");
   if (!input.working_directory.trim()) throw new Error("Working directory is required.");
   validateCommandSafety(input.command);
+  if (input.is_long_running && !input.requires_confirmation) throw new Error("Long-running command templates must require confirmation.");
+  if (input.allow_background_run && !input.is_long_running) throw new Error("Only long-running command templates can allow background runs.");
 }
 
 export function validateCommandSafety(command: string): void {
@@ -215,16 +237,19 @@ export function inferCommandRisk(command: string): Exclude<RiskLevel, "dangerous
 }
 
 export function isLongRunningCommand(command: string): boolean {
-  return /\b(dev|serve|watch|start)\b/i.test(command);
+  return /\b(dev|serve|watch|start|queue:work|flutter run|cargo watch)\b/i.test(command);
 }
 
 function clampTimeout(timeout: number): number {
   return Math.max(5, Math.min(600, Math.round(timeout)));
 }
 
-interface DbCommandTemplate extends Omit<CommandTemplateRecord, "enabled" | "requires_confirmation"> {
+interface DbCommandTemplate extends Omit<CommandTemplateRecord, "enabled" | "requires_confirmation" | "is_long_running" | "allow_background_run" | "auto_stop_on_app_exit"> {
   enabled: number | boolean;
   requires_confirmation: number | boolean;
+  is_long_running: number | boolean;
+  allow_background_run: number | boolean;
+  auto_stop_on_app_exit: number | boolean;
 }
 
 function fromDb(row: DbCommandTemplate): CommandTemplateRecord {
@@ -232,6 +257,10 @@ function fromDb(row: DbCommandTemplate): CommandTemplateRecord {
     ...row,
     enabled: Boolean(row.enabled),
     requires_confirmation: Boolean(row.requires_confirmation),
+    is_long_running: Boolean(row.is_long_running),
+    allow_background_run: Boolean(row.allow_background_run),
+    auto_stop_on_app_exit: row.auto_stop_on_app_exit === undefined ? true : Boolean(row.auto_stop_on_app_exit),
+    max_runtime_seconds: row.max_runtime_seconds === undefined ? null : row.max_runtime_seconds,
     timeout_seconds: Number(row.timeout_seconds ?? 120),
     run_count: Number(row.run_count ?? 0)
   };

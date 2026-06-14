@@ -3,6 +3,7 @@ import { openPath, openUrl } from "@tauri-apps/plugin-opener";
 import type { ActionPreview, AppSettings, MemoryType } from "../../types";
 import { touchRegisteredApp, validateExecutablePath } from "../apps/registeredAppsRepository";
 import { touchCommandTemplate, validateCommandSafety, type CommandRunResult } from "../commands/commandTemplateRepository";
+import { createBackgroundProcess, updateBackgroundProcess } from "../processes/backgroundProcessRepository";
 import { createMemory } from "../memory/memoryRepository";
 import { updateActionLog } from "../logs/actionLogRepository";
 import { nowIso } from "../utils";
@@ -68,6 +69,35 @@ export async function executeApprovedTool(preview: ActionPreview, settings: AppS
         throw new Error(summary);
       }
       await touchCommandTemplate(String(preview.input.command_template_id ?? ""), summary);
+    } else if (preview.tool.name === "start_background_process") {
+      validateCommandSafety(String(preview.input.command ?? ""));
+      await assertPathInsideAllowedFolder(String(preview.input.working_directory ?? ""), settings);
+      const process = await createBackgroundProcess({
+        command_template_id: String(preview.input.command_template_id ?? ""),
+        project_id: preview.input.project_id ? String(preview.input.project_id) : null,
+        name: String(preview.input.command_name ?? "Background process"),
+        command: String(preview.input.command ?? ""),
+        working_directory: String(preview.input.working_directory ?? ""),
+        status: "starting",
+        output_log_path: `klak-${String(preview.input.command_template_id ?? "process")}-${Date.now()}`
+      });
+      const result = await invoke<{ process_id: string; pid: number; status: string; output_log_path: string }>("start_background_process", {
+        input: {
+          process_id: process.id,
+          command_template_id: process.command_template_id,
+          command: process.command,
+          working_directory: process.working_directory,
+          output_log_path: process.output_log_path,
+          max_runtime_seconds: preview.input.max_runtime_seconds ? Number(preview.input.max_runtime_seconds) : null
+        }
+      });
+      await updateBackgroundProcess(process.id, {
+        status: "running",
+        process_pid: result.pid,
+        output_log_path: result.output_log_path,
+        last_output_preview: "Started background process."
+      });
+      await touchCommandTemplate(process.command_template_id, `Started background process pid ${result.pid}`);
     } else {
       throw new Error(`${preview.tool.label} is registered but execution is stubbed in this MVP.`);
     }

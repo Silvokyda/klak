@@ -37,9 +37,9 @@ npm run tauri build
 - Local data is stored in `sqlite:klak.db` through the Tauri SQL plugin when Klak runs as a desktop app.
 - During browser-only Vite development, repositories use `klak.insecure_dev_database.v1` in localStorage so UI work can continue without the Tauri runtime.
 - Database initialization is idempotent. `initDatabase()` creates tables and records migration version `1` in `schema_migrations`.
-- SQLite tables store memories, projects, workflows, registered apps, command templates, action logs, non-secret app settings, tool settings, and allowed folders.
+- SQLite tables store memories, projects, workflows, registered apps, command templates, background processes, action logs, non-secret app settings, tool settings, and allowed folders.
 - API keys are stored through `secretStore`. In native Tauri, Klak uses Windows-backed storage through the Rust `keyring` crate. In browser-only development, Klak falls back to `insecureDevSecretStore.ts` and warns: "Development storage is active. Do not use production keys."
-- Implemented safe tools: `open_url`, `open_folder`, `launch_app`, `run_command_template`, `create_note`, `copy_to_clipboard`, `search_memory`, and `create_memory`. They all go through permission checks, action previews, approval/denial, and audit logging.
+- Implemented safe tools: `open_url`, `open_folder`, `launch_app`, `run_command_template`, `start_background_process`, `create_note`, `copy_to_clipboard`, `search_memory`, and `create_memory`. They all go through permission checks, action previews, approval/denial, and audit logging.
 - The Apps screen lets users register approved `.exe` applications. Klak can launch only those registered apps, never arbitrary shell commands or arguments.
 - Dangerous tools are registered as disabled future extension points and blocked by the permission system.
 - Voice input is opt-in and push-to-talk only. Klak does not listen in the background and does not upload audio.
@@ -64,9 +64,22 @@ Rules:
 - shell chaining, pipes, redirection, background execution, destructive commands, credential-looking commands, and environment dumping are blocked,
 - command output is captured and truncated,
 - timeouts are enforced,
-- long-running commands such as `npm run tauri dev` are blocked until background process management exists.
+- long-running commands such as `npm run tauri dev` must be explicitly marked for background runs.
 
 Workflow command steps select saved command templates only. Project command buttons also run through the same preview and approval path.
+
+## Background Processes
+
+Long-running command templates can be marked as `Long-running` and `Background run`. Starting one creates a Klak-managed process record, writes bounded output to the system temp directory under `klak/process-logs`, and shows status in Processes.
+
+Klak only stops processes it started and recorded. Duplicate starts for the same template are blocked. On app start, stale process records are reconciled; if the native child is no longer known, the record is marked stopped or exited rather than killing arbitrary system processes.
+
+Example Klak startup workflow:
+
+1. `launch_app`: VS Code
+2. `open_folder`: the Klak repository
+3. `start_background_process`: `npm run tauri dev`
+4. `open_url`: `http://localhost:1420`
 
 ## Local Whisper CLI
 

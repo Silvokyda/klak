@@ -4,10 +4,14 @@ use tauri::Manager;
 use tauri_plugin_sql::{Migration, MigrationKind};
 use wait_timeout::ChildExt;
 
+use std::collections::HashMap;
 use std::fs;
-use std::io::Read;
+use std::fs::{File, OpenOptions};
+use std::io::{Read, Write};
 use std::path::{Path, PathBuf};
-use std::process::{Command, Stdio};
+use std::process::{Child, Command, Stdio};
+use std::sync::{Arc, Mutex, OnceLock};
+use std::thread;
 use std::time::{Duration, Instant};
 
 const KLAK_DB: &str = "sqlite:klak.db";
@@ -62,6 +66,9 @@ CREATE TABLE IF NOT EXISTS allowed_folders (
 const SECRET_SERVICE: &str = "Klak";
 const WHISPER_TIMEOUT_SECONDS: u64 = 120;
 const COMMAND_OUTPUT_LIMIT: usize = 8_000;
+const BACKGROUND_OUTPUT_LIMIT: usize = 12_000;
+
+static BACKGROUND_CHILDREN: OnceLock<Mutex<HashMap<String, Child>>> = OnceLock::new();
 
 #[derive(serde::Deserialize)]
 struct SaveTempAudioInput {
@@ -100,6 +107,51 @@ struct RunCommandTemplateInput {
     command: String,
     working_directory: String,
     timeout_seconds: u64,
+}
+
+#[derive(serde::Deserialize)]
+struct StartBackgroundProcessInput {
+    process_id: String,
+    command_template_id: String,
+    command: String,
+    working_directory: String,
+    output_log_path: Option<String>,
+    max_runtime_seconds: Option<u64>,
+}
+
+#[derive(serde::Deserialize)]
+struct StopBackgroundProcessInput {
+    process_id: String,
+    force: Option<bool>,
+}
+
+#[derive(serde::Deserialize)]
+struct BackgroundProcessIdInput {
+    process_id: String,
+}
+
+#[derive(serde::Serialize)]
+struct BackgroundProcessStartOutput {
+    process_id: String,
+    pid: u32,
+    status: String,
+    output_log_path: String,
+}
+
+#[derive(serde::Serialize)]
+struct BackgroundProcessStatusOutput {
+    process_id: String,
+    running: bool,
+    status: String,
+    pid: Option<u32>,
+    exit_code: Option<i32>,
+    uptime_ms: Option<u128>,
+}
+
+#[derive(serde::Serialize)]
+struct BackgroundProcessOutput {
+    output: String,
+    warning: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -327,6 +379,191 @@ fn run_command_template(input: RunCommandTemplateInput) -> Result<CommandRunOutp
     })
 }
 
+#[tauri::command]
+fn start_background_process(
+    input: StartBackgroundProcessInput,
+) -> Result<BackgroundProcessStartOutput, String> {
+    if input.process_id.trim().is_empty() || input.command_template_id.trim().is_empty() {
+        return Err("Background process id and command template id are required.".into());
+    }
+    let working_directory = PathBuf::from(input.working_directory.trim());
+    if !working_directory.is_dir() {
+        return Err(
+            "Background process working directory does not exist or is not a directory.".into(),
+        );
+    }
+    let parts = split_command(&input.command)?;
+    if parts.is_empty() {
+        return Err("Command is empty.".into());
+    }
+
+    let program = resolve_program(&parts[0]);
+    let args = &parts[1..];
+    let output_log_path = resolve_background_log_path(
+        input
+            .output_log_path
+            .as_deref()
+            .unwrap_or(input.process_id.as_str()),
+    )?;
+    let file = OpenOptions::new()
+        .create(true)
+        .append(true)
+        .open(&output_log_path)
+        .map_err(|error| format!("Unable to open background output log: {error}"))?;
+    let log = Arc::new(Mutex::new(file));
+
+    let mut child = Command::new(program)
+        .args(args)
+        .current_dir(&working_directory)
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .spawn()
+        .map_err(|error| format!("Unable to start background process: {error}"))?;
+    let pid = child.id();
+    if let Some(stdout) = child.stdout.take() {
+        pipe_to_log(stdout, Arc::clone(&log));
+    }
+    if let Some(stderr) = child.stderr.take() {
+        pipe_to_log(stderr, Arc::clone(&log));
+    }
+    if let Some(max_runtime_seconds) = input.max_runtime_seconds {
+        let process_id = input.process_id.clone();
+        thread::spawn(move || {
+            thread::sleep(Duration::from_secs(max_runtime_seconds.clamp(5, 86_400)));
+            if let Some(children) = BACKGROUND_CHILDREN.get() {
+                if let Ok(mut map) = children.lock() {
+                    if let Some(child) = map.get_mut(&process_id) {
+                        if matches!(child.try_wait(), Ok(None)) {
+                            let _ = child.kill();
+                        }
+                    }
+                }
+            }
+        });
+    }
+
+    background_children()
+        .lock()
+        .map_err(|_| "Background process registry is unavailable.".to_string())?
+        .insert(input.process_id.clone(), child);
+
+    Ok(BackgroundProcessStartOutput {
+        process_id: input.process_id,
+        pid,
+        status: "running".into(),
+        output_log_path: output_log_path.to_string_lossy().to_string(),
+    })
+}
+
+#[tauri::command]
+fn stop_background_process(
+    input: StopBackgroundProcessInput,
+) -> Result<BackgroundProcessStatusOutput, String> {
+    let mut children = background_children()
+        .lock()
+        .map_err(|_| "Background process registry is unavailable.".to_string())?;
+    let Some(child) = children.get_mut(&input.process_id) else {
+        return Ok(BackgroundProcessStatusOutput {
+            process_id: input.process_id,
+            running: false,
+            status: "stopped".into(),
+            pid: None,
+            exit_code: None,
+            uptime_ms: None,
+        });
+    };
+    if matches!(child.try_wait(), Ok(None)) {
+        let _ = child.kill();
+        let _ = child.wait();
+    }
+    let exit_code = child
+        .try_wait()
+        .ok()
+        .flatten()
+        .and_then(|status| status.code());
+    let pid = child.id();
+    children.remove(&input.process_id);
+    Ok(BackgroundProcessStatusOutput {
+        process_id: input.process_id,
+        running: false,
+        status: if input.force.unwrap_or(false) {
+            "killed"
+        } else {
+            "stopped"
+        }
+        .into(),
+        pid: Some(pid),
+        exit_code,
+        uptime_ms: None,
+    })
+}
+
+#[tauri::command]
+fn get_background_process_status(
+    input: BackgroundProcessIdInput,
+) -> Result<BackgroundProcessStatusOutput, String> {
+    let mut children = background_children()
+        .lock()
+        .map_err(|_| "Background process registry is unavailable.".to_string())?;
+    let Some(child) = children.get_mut(&input.process_id) else {
+        return Ok(BackgroundProcessStatusOutput {
+            process_id: input.process_id,
+            running: false,
+            status: "stopped".into(),
+            pid: None,
+            exit_code: None,
+            uptime_ms: None,
+        });
+    };
+    let pid = child.id();
+    match child.try_wait().map_err(|error| error.to_string())? {
+        Some(status) => {
+            let exit_code = status.code();
+            children.remove(&input.process_id);
+            Ok(BackgroundProcessStatusOutput {
+                process_id: input.process_id,
+                running: false,
+                status: "exited".into(),
+                pid: Some(pid),
+                exit_code,
+                uptime_ms: None,
+            })
+        }
+        None => Ok(BackgroundProcessStatusOutput {
+            process_id: input.process_id,
+            running: true,
+            status: "running".into(),
+            pid: Some(pid),
+            exit_code: None,
+            uptime_ms: None,
+        }),
+    }
+}
+
+#[tauri::command]
+fn read_background_process_output(
+    output_log_path: String,
+) -> Result<BackgroundProcessOutput, String> {
+    let path = PathBuf::from(output_log_path);
+    if !path.is_file() {
+        return Ok(BackgroundProcessOutput {
+            output: "".into(),
+            warning: None,
+        });
+    }
+    let mut output = fs::read_to_string(&path)
+        .map_err(|error| format!("Unable to read background process output: {error}"))?;
+    if output.len() > BACKGROUND_OUTPUT_LIMIT {
+        output = output[output.len() - BACKGROUND_OUTPUT_LIMIT..].to_string();
+    }
+    let warning = if looks_sensitive_output(&output) {
+        Some("Output may contain sensitive-looking text. Review before sharing.".into())
+    } else {
+        None
+    };
+    Ok(BackgroundProcessOutput { output, warning })
+}
+
 fn resolve_program(program: &str) -> String {
     if cfg!(windows) {
         match program.to_lowercase().as_str() {
@@ -344,6 +581,58 @@ fn resolve_program(program: &str) -> String {
     } else {
         program.into()
     }
+}
+
+fn background_children() -> &'static Mutex<HashMap<String, Child>> {
+    BACKGROUND_CHILDREN.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn resolve_background_log_path(value: &str) -> Result<PathBuf, String> {
+    let candidate = PathBuf::from(value);
+    if candidate.is_absolute() {
+        if let Some(parent) = candidate.parent() {
+            fs::create_dir_all(parent).map_err(|error| error.to_string())?;
+        }
+        return Ok(candidate);
+    }
+    let mut dir = std::env::temp_dir();
+    dir.push("klak");
+    dir.push("process-logs");
+    fs::create_dir_all(&dir).map_err(|error| error.to_string())?;
+    dir.push(format!("{}.log", value.replace(['\\', '/', ':'], "-")));
+    Ok(dir)
+}
+
+fn pipe_to_log<R: Read + Send + 'static>(mut reader: R, log: Arc<Mutex<File>>) {
+    thread::spawn(move || {
+        let mut buffer = [0_u8; 4096];
+        loop {
+            match reader.read(&mut buffer) {
+                Ok(0) => break,
+                Ok(size) => {
+                    if let Ok(mut file) = log.lock() {
+                        let _ = file.write_all(&buffer[..size]);
+                        let _ = file.flush();
+                    }
+                }
+                Err(_) => break,
+            }
+        }
+    });
+}
+
+fn looks_sensitive_output(value: &str) -> bool {
+    let lower = value.to_lowercase();
+    [
+        "api_key",
+        "apikey",
+        "password",
+        "secret",
+        "token",
+        "private key",
+    ]
+    .iter()
+    .any(|needle| lower.contains(needle))
 }
 
 fn split_command(command: &str) -> Result<Vec<String>, String> {
@@ -615,6 +904,10 @@ pub fn run() {
             launch_registered_app,
             validate_registered_app_path,
             run_command_template,
+            start_background_process,
+            stop_background_process,
+            get_background_process_status,
+            read_background_process_output,
             save_temp_voice_audio,
             validate_whisper_setup,
             transcribe_audio_with_whisper
