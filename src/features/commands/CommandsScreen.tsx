@@ -929,9 +929,12 @@ function CommandCard({
                 type="number"
                 min={0}
                 max={86400}
-                value={editDraft.max_runtime_seconds}
+                value={editDraft.max_runtime_seconds ?? ""}
                 onChange={(event) =>
-                  setEditDraft({ ...editDraft, max_runtime_seconds: Number(event.target.value) })
+                  setEditDraft({
+                    ...editDraft,
+                    max_runtime_seconds: event.target.value === "" ? null : Number(event.target.value)
+                  })
                 }
               />
             </label>

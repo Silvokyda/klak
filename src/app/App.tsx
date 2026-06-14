@@ -18,6 +18,7 @@ import { defaultSettings, loadSettings, saveSettings } from "../lib/storage/sett
 import { labelPermissionMode } from "../lib/utils";
 import { initDatabase } from "../lib/db/database";
 import { listRunningBackgroundProcesses, markProcessStopped, updateBackgroundProcess } from "../lib/processes/backgroundProcessRepository";
+import { syncWakeListener } from "../lib/voice/wakeListener";
 import klakLogo from "../../assets/klak-icon.png";
 
 type View = "assistant" | "memory" | "projects" | "workflows" | "apps" | "commands" | "processes" | "tools" | "logs" | "diagnostics" | "settings";
@@ -33,6 +34,21 @@ export function App() {
       setReady(true);
     });
   }, []);
+
+  useEffect(() => {
+    if (!ready || !settings.setupComplete) return;
+    syncWakeListener(settings).catch((error) => {
+      console.warn("Wake listener sync failed", error);
+    });
+  }, [
+    ready,
+    settings.setupComplete,
+    settings.wakeWordEnabled,
+    settings.wakeWordPythonPath,
+    settings.wakeWordModel,
+    settings.wakeWordCustomModelPath,
+    settings.wakeWordThreshold
+  ]);
 
   async function updateSettings(next: AppSettings) {
     setSettings(next);

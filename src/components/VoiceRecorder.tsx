@@ -1,20 +1,39 @@
 import { Mic, Square, X } from "lucide-react";
-import { useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import type { AppSettings } from "../types";
 import { getTranscriptionProvider } from "../lib/voice/transcription";
 import { createActionLog } from "../lib/logs/actionLogRepository";
+import { verifyOwnerVoice } from "../lib/voice/voiceProfile";
 
 interface Props {
   settings: AppSettings;
-  onTranscript: (text: string) => void;
+  onTranscript: (text: string) => void | Promise<void>;
+  autoStartSignal?: number;
+  autoStopAfterMs?: number;
 }
 
-export function VoiceRecorder({ settings, onTranscript }: Props) {
+export function VoiceRecorder({ settings, onTranscript, autoStartSignal = 0, autoStopAfterMs }: Props) {
   const recorderRef = useRef<MediaRecorder | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const chunksRef = useRef<Blob[]>([]);
+  const recordingRef = useRef(false);
   const [recording, setRecording] = useState(false);
   const [message, setMessage] = useState<string | null>(null);
+
+  useEffect(() => {
+    recordingRef.current = recording;
+  }, [recording]);
+
+  useEffect(() => {
+    if (!autoStartSignal || recordingRef.current) return;
+    void start();
+
+    if (autoStopAfterMs) {
+      window.setTimeout(() => {
+        if (recordingRef.current) void stop();
+      }, autoStopAfterMs);
+    }
+  }, [autoStartSignal]);
 
   async function start() {
     setMessage(null);
@@ -24,6 +43,10 @@ export function VoiceRecorder({ settings, onTranscript }: Props) {
     }
     if (settings.voiceInputProvider === "disabled") {
       setMessage("Choose a voice input provider in Settings first.");
+      return;
+    }
+    if (settings.voiceInputProvider === "openai_transcription" && !settings.apiKeyStored) {
+      setMessage("Add your OpenAI API key in Settings first.");
       return;
     }
     if (settings.voiceInputProvider === "local_whisper_cli" && (!settings.localWhisperExecutablePath || !settings.localWhisperModelPath)) {
@@ -47,6 +70,7 @@ export function VoiceRecorder({ settings, onTranscript }: Props) {
         stream.getTracks().forEach((track) => track.stop());
       };
       recorder.start();
+      recordingRef.current = true;
       setRecording(true);
       await createActionLog({
         tool_name: "voice_recording_started",
@@ -68,6 +92,7 @@ export function VoiceRecorder({ settings, onTranscript }: Props) {
     });
     recorder.stop();
     await stopped;
+    recordingRef.current = false;
     setRecording(false);
     const audio = new Blob(chunksRef.current, { type: recorder.mimeType || "audio/webm" });
     chunksRef.current = [];
@@ -78,9 +103,24 @@ export function VoiceRecorder({ settings, onTranscript }: Props) {
       status: "completed",
       user_approved: true
     });
+    if (settings.voiceProfileEnabled) {
+      const voiceCheck = await verifyOwnerVoice(audio, settings);
+      if (!voiceCheck.ok) {
+        await createActionLog({
+          tool_name: "voice_owner_verification_failed",
+          input_summary: voiceCheck.message,
+          risk_level: "medium",
+          status: "blocked",
+          user_approved: false,
+          error_message: voiceCheck.message
+        });
+        setMessage(voiceCheck.message);
+        return;
+      }
+    }
     const result = await getTranscriptionProvider(settings).transcribe({ audio, settings });
     if (result.text) {
-      onTranscript(result.text);
+      await onTranscript(result.text);
       await createActionLog({
         tool_name: "voice_transcription_completed",
         input_summary: `transcript chars: ${result.text.length}, duration ms: ${result.durationMs ?? "unknown"}`,
@@ -88,7 +128,7 @@ export function VoiceRecorder({ settings, onTranscript }: Props) {
         status: "completed",
         user_approved: true
       });
-      setMessage(result.warning ?? "Transcription inserted into the chat input.");
+      setMessage(result.warning ?? "Voice command sent.");
     } else {
       await createActionLog({
         tool_name: "voice_transcription_failed",
@@ -106,6 +146,7 @@ export function VoiceRecorder({ settings, onTranscript }: Props) {
     recorderRef.current?.stop();
     streamRef.current?.getTracks().forEach((track) => track.stop());
     chunksRef.current = [];
+    recordingRef.current = false;
     setRecording(false);
     void createActionLog({
       tool_name: "voice_recording_cancelled",
@@ -123,6 +164,7 @@ export function VoiceRecorder({ settings, onTranscript }: Props) {
 
   const needsWhisperSetup =
     settings.voiceInputProvider === "local_whisper_cli" && (!settings.localWhisperExecutablePath || !settings.localWhisperModelPath);
+  const needsOpenAiSetup = settings.voiceInputProvider === "openai_transcription" && !settings.apiKeyStored;
 
   return (
     <div className="voice-control">
@@ -130,8 +172,16 @@ export function VoiceRecorder({ settings, onTranscript }: Props) {
       <button
         type="button"
         onClick={recording ? stop : start}
-        disabled={needsWhisperSetup}
-        title={needsWhisperSetup ? "Configure local Whisper first." : recording ? "Stop recording" : "Start push-to-talk recording"}
+        disabled={needsWhisperSetup || needsOpenAiSetup}
+        title={
+          needsOpenAiSetup
+            ? "Add your OpenAI API key first."
+            : needsWhisperSetup
+              ? "Configure local Whisper first."
+              : recording
+                ? "Stop recording"
+                : "Start push-to-talk recording"
+        }
       >
         {recording ? <Square size={16} /> : <Mic size={16} />}
         {recording ? "Stop" : "Voice"}
@@ -142,6 +192,7 @@ export function VoiceRecorder({ settings, onTranscript }: Props) {
           Cancel
         </button>
       )}
+      {needsOpenAiSetup && <span>Add your OpenAI API key first.</span>}
       {needsWhisperSetup && <span>Configure local Whisper first.</span>}
       {message && <span>{message}</span>}
     </div>

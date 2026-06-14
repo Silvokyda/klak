@@ -7,15 +7,17 @@ import {
   ShieldCheck,
   SlidersHorizontal,
   Stethoscope,
+  UserRoundCheck,
   Trash2
 } from "lucide-react";
-import { useMemo, useState } from "react";
+import { useMemo, useRef, useState } from "react";
 import { ScreenHeader } from "../../components/ScreenHeader";
 import type { AppSettings, PermissionMode } from "../../types";
 import { apiKeyVault } from "../../lib/security/apiKeyVault";
 import { getSecretStorageStatus } from "../../lib/security/secretStore";
 import { clearLocalData } from "../../lib/storage/settings";
 import { testWhisperSetup } from "../../lib/voice/transcription";
+import { createVoiceProfile, voiceProfileSummary } from "../../lib/voice/voiceProfile";
 
 const modes: PermissionMode[] = [
   "observe_only",
@@ -59,6 +61,11 @@ export function SettingsScreen({
   const [apiKey, setApiKey] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [whisperStatus, setWhisperStatus] = useState<string | null>(null);
+  const [voiceSamples, setVoiceSamples] = useState<Blob[]>([]);
+  const [voiceProfileMessage, setVoiceProfileMessage] = useState<string | null>(null);
+  const [capturingVoiceSample, setCapturingVoiceSample] = useState(false);
+  const sampleRecorderRef = useRef<MediaRecorder | null>(null);
+  const sampleChunksRef = useRef<Blob[]>([]);
 
   const hasUnsavedChanges = useMemo(() => {
     return JSON.stringify(draft) !== JSON.stringify(settings) || Boolean(apiKey.trim());
@@ -107,6 +114,82 @@ export function SettingsScreen({
     } catch (error) {
       setWhisperStatus(error instanceof Error ? error.message : String(error));
     }
+  }
+
+  async function captureVoiceSample() {
+    setVoiceProfileMessage(null);
+    if (!navigator.mediaDevices?.getUserMedia) {
+      setVoiceProfileMessage("Microphone recording is not available in this WebView.");
+      return;
+    }
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      sampleChunksRef.current = [];
+      const recorder = new MediaRecorder(stream);
+      sampleRecorderRef.current = recorder;
+      recorder.ondataavailable = (event) => {
+        if (event.data.size > 0) sampleChunksRef.current.push(event.data);
+      };
+      recorder.onstop = () => {
+        stream.getTracks().forEach((track) => track.stop());
+      };
+      recorder.start();
+      setCapturingVoiceSample(true);
+      window.setTimeout(() => {
+        void stopVoiceSampleCapture();
+      }, 3200);
+    } catch (error) {
+      setVoiceProfileMessage(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function stopVoiceSampleCapture() {
+    const recorder = sampleRecorderRef.current;
+    if (!recorder || recorder.state === "inactive") return;
+
+    const stopped = new Promise<void>((resolve) => {
+      recorder.addEventListener("stop", () => resolve(), { once: true });
+    });
+    recorder.stop();
+    await stopped;
+    setCapturingVoiceSample(false);
+    const sample = new Blob(sampleChunksRef.current, { type: recorder.mimeType || "audio/webm" });
+    sampleChunksRef.current = [];
+    if (sample.size < 1000) {
+      setVoiceProfileMessage("That sample was too quiet or too short. Try again near the microphone.");
+      return;
+    }
+    setVoiceSamples((items) => [...items, sample].slice(-5));
+    setVoiceProfileMessage("Sample captured.");
+  }
+
+  async function enrollVoiceProfile() {
+    setVoiceProfileMessage("Creating local voice profile...");
+    try {
+      const calibration = await createVoiceProfile(voiceSamples, "Hi Klak");
+      setDraft({
+        ...draft,
+        voiceProfileEnabled: true,
+        voiceProfileStatus: "enrolled",
+        voiceProfileCalibration: calibration
+      });
+      setVoiceSamples([]);
+      setVoiceProfileMessage("Owner voice profile captured. Save settings to keep it.");
+    } catch (error) {
+      setVoiceProfileMessage(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  function clearVoiceProfile() {
+    setDraft({
+      ...draft,
+      voiceProfileEnabled: false,
+      voiceProfileStatus: "not_enrolled",
+      voiceProfileCalibration: ""
+    });
+    setVoiceSamples([]);
+    setVoiceProfileMessage("Voice profile cleared. Save settings to keep this change.");
   }
 
   return (
@@ -164,7 +247,7 @@ export function SettingsScreen({
           icon={<Mic size={18} />}
           label="Voice"
           value={draft.voiceEnabled ? "Enabled" : "Off"}
-          hint="No wake-word listening"
+          hint={draft.voiceProfileEnabled ? "Owner voice required" : "Voice lock optional"}
         />
       </section>
 
@@ -322,6 +405,111 @@ export function SettingsScreen({
               onChange={(checked) => setDraft({ ...draft, pushToTalkEnabled: checked })}
             />
 
+            <div className="settings-note-card">
+              <UserRoundCheck size={18} />
+              <span>
+                Voice lock checks owner-like audio features locally before Klak sends audio for
+                transcription. It improves household privacy, but it is not a hard security boundary.
+              </span>
+            </div>
+
+            <ToggleRow
+              checked={draft.voiceProfileEnabled}
+              title="Require owner voice"
+              description="Ignore spoken commands that do not match the enrolled local voice profile."
+              onChange={(checked) =>
+                setDraft({
+                  ...draft,
+                  voiceProfileEnabled: checked,
+                  voiceProfileStatus: draft.voiceProfileCalibration ? "enrolled" : "not_enrolled"
+                })
+              }
+            />
+
+            <div className="voice-profile-card">
+              <div>
+                <strong>Owner voice profile</strong>
+                <span>{voiceProfileSummary(draft)}</span>
+              </div>
+              <p>Say “Hi Klak, this is my voice” for each sample. Capture at least three samples.</p>
+              <div className="voice-profile-meter">
+                {[0, 1, 2].map((index) => (
+                  <span key={index} className={voiceSamples.length > index ? "filled" : ""} />
+                ))}
+              </div>
+              <div className="routine-builder-actions">
+                <button type="button" onClick={captureVoiceSample} disabled={capturingVoiceSample}>
+                  <Mic size={16} />
+                  {capturingVoiceSample ? "Listening" : "Capture sample"}
+                </button>
+                <button type="button" onClick={enrollVoiceProfile} disabled={voiceSamples.length < 3 || capturingVoiceSample}>
+                  <UserRoundCheck size={16} />
+                  Enroll voice
+                </button>
+                <button type="button" onClick={clearVoiceProfile}>
+                  Clear profile
+                </button>
+              </div>
+              {voiceProfileMessage && <span className="inline-status">{voiceProfileMessage}</span>}
+            </div>
+
+            <div className="settings-subsection">
+              <div>
+                <strong>Wake word</strong>
+                <span>Use the free local openWakeWord sidecar to wake Klak while it sits in the tray.</span>
+              </div>
+
+              <ToggleRow
+                checked={draft.wakeWordEnabled}
+                title="Enable local wake word"
+                description="Starts a local Python sidecar that listens for a wake phrase and then summons Klak."
+                onChange={(checked) => setDraft({ ...draft, wakeWordEnabled: checked })}
+              />
+
+              <label className="field-stack">
+                <span>Python executable</span>
+                <input
+                  value={draft.wakeWordPythonPath}
+                  onChange={(event) => setDraft({ ...draft, wakeWordPythonPath: event.target.value })}
+                  placeholder="python"
+                />
+                <small>Install dependencies with: pip install -r sidecar\\requirements-wakeword.txt</small>
+              </label>
+
+              <label className="field-stack">
+                <span>Built-in model name</span>
+                <input
+                  value={draft.wakeWordModel}
+                  onChange={(event) => setDraft({ ...draft, wakeWordModel: event.target.value })}
+                  placeholder="hey_jarvis"
+                />
+                <small>Use a built-in phrase for testing. Add a custom model path for "Hi Klak" later.</small>
+              </label>
+
+              <label className="field-stack">
+                <span>Custom model path</span>
+                <input
+                  value={draft.wakeWordCustomModelPath}
+                  onChange={(event) => setDraft({ ...draft, wakeWordCustomModelPath: event.target.value })}
+                  placeholder="C:\\Models\\hi-klak.onnx"
+                />
+              </label>
+
+              <label className="field-stack">
+                <span>Wake threshold</span>
+                <input
+                  type="number"
+                  min={0.2}
+                  max={0.95}
+                  step={0.05}
+                  value={draft.wakeWordThreshold}
+                  onChange={(event) =>
+                    setDraft({ ...draft, wakeWordThreshold: Number(event.target.value) || 0.55 })
+                  }
+                />
+              </label>
+            </div>
+
             <label className="field-stack">
               <span>Voice input provider</span>
               <select
@@ -334,8 +522,20 @@ export function SettingsScreen({
                 }
               >
                 <option value="disabled">Disabled</option>
+                <option value="openai_transcription">OpenAI transcription</option>
                 <option value="local_whisper_cli">Local Whisper CLI</option>
               </select>
+            </label>
+
+            <label className="field-stack">
+              <span>OpenAI transcription model</span>
+              <input
+                value={draft.openAiTranscriptionModel}
+                onChange={(event) =>
+                  setDraft({ ...draft, openAiTranscriptionModel: event.target.value })
+                }
+                placeholder="gpt-4o-mini-transcribe"
+              />
             </label>
 
             <label className="field-stack">

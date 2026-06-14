@@ -1,5 +1,6 @@
 import type { AppSettings, VoiceTranscriptionInput, VoiceTranscriptionProvider, VoiceTranscriptionResult } from "../../types";
 import { invoke, isTauri } from "@tauri-apps/api/core";
+import { apiKeyVault } from "../security/apiKeyVault";
 
 interface NativeTempAudioOutput {
   audio_path: string;
@@ -54,8 +55,46 @@ export const localWhisperCliProvider: VoiceTranscriptionProvider = {
   }
 };
 
+export const openAiTranscriptionProvider: VoiceTranscriptionProvider = {
+  async transcribe(input: VoiceTranscriptionInput): Promise<VoiceTranscriptionResult> {
+    const apiKey = await apiKeyVault.getApiKeyForProviderCall();
+    if (!apiKey) {
+      return { text: "", error: "Add your OpenAI API key in Settings before using OpenAI voice transcription." };
+    }
+
+    try {
+      const form = new FormData();
+      form.append("model", input.settings.openAiTranscriptionModel || "gpt-4o-mini-transcribe");
+      form.append("response_format", "json");
+      form.append("file", input.audio, `klak-voice.${extensionFromMime(input.audio.type)}`);
+
+      const response = await fetch(`${input.settings.apiBaseUrl.replace(/\/$/, "")}/audio/transcriptions`, {
+        method: "POST",
+        headers: {
+          Authorization: `Bearer ${apiKey}`
+        },
+        body: form
+      });
+
+      if (!response.ok) {
+        const errorText = await response.text().catch(() => "");
+        return {
+          text: "",
+          error: `OpenAI transcription returned ${response.status}${errorText ? `: ${errorText.slice(0, 240)}` : "."}`
+        };
+      }
+
+      const data = await response.json();
+      return { text: typeof data.text === "string" ? data.text.trim() : "" };
+    } catch (error) {
+      return { text: "", error: error instanceof Error ? error.message : String(error) };
+    }
+  }
+};
+
 export function getTranscriptionProvider(settings: AppSettings): VoiceTranscriptionProvider {
   if (!settings.voiceEnabled || settings.voiceInputProvider === "disabled") return disabledVoiceProvider;
+  if (settings.voiceInputProvider === "openai_transcription") return openAiTranscriptionProvider;
   return localWhisperCliProvider;
 }
 

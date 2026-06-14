@@ -20,6 +20,16 @@ export type SettingKey =
   | "push_to_talk_enabled"
   | "voice_input_provider"
   | "voice_output_provider"
+  | "openai_transcription_model"
+  | "voice_profile_enabled"
+  | "voice_profile_status"
+  | "voice_profile_calibration"
+  | "wake_word_enabled"
+  | "wake_word_provider"
+  | "wake_word_python_path"
+  | "wake_word_model"
+  | "wake_word_custom_model_path"
+  | "wake_word_threshold"
   | "local_whisper_executable_path"
   | "local_whisper_model_path"
   | "local_whisper_language"
@@ -40,8 +50,18 @@ export const defaultSettings: AppSettings = {
   allToolsDisabled: false,
   voiceEnabled: false,
   pushToTalkEnabled: true,
-  voiceInputProvider: "disabled",
+  voiceInputProvider: "openai_transcription",
   voiceOutputProvider: "disabled",
+  openAiTranscriptionModel: "gpt-4o-mini-transcribe",
+  voiceProfileEnabled: false,
+  voiceProfileStatus: "not_enrolled",
+  voiceProfileCalibration: "",
+  wakeWordEnabled: false,
+  wakeWordProvider: "openwakeword_sidecar",
+  wakeWordPythonPath: "python",
+  wakeWordModel: "hey_jarvis",
+  wakeWordCustomModelPath: "",
+  wakeWordThreshold: 0.55,
   localWhisperExecutablePath: "",
   localWhisperModelPath: "",
   localWhisperLanguage: "auto",
@@ -99,6 +119,16 @@ export async function loadSettings(): Promise<AppSettings> {
     pushToTalkEnabled: rows.push_to_talk_enabled !== "false",
     voiceInputProvider: (rows.voice_input_provider as AppSettings["voiceInputProvider"]) || defaultSettings.voiceInputProvider,
     voiceOutputProvider: (rows.voice_output_provider as AppSettings["voiceOutputProvider"]) || defaultSettings.voiceOutputProvider,
+    openAiTranscriptionModel: rows.openai_transcription_model || defaultSettings.openAiTranscriptionModel,
+    voiceProfileEnabled: rows.voice_profile_enabled === "true",
+    voiceProfileStatus: (rows.voice_profile_status as AppSettings["voiceProfileStatus"]) || defaultSettings.voiceProfileStatus,
+    voiceProfileCalibration: rows.voice_profile_calibration || "",
+    wakeWordEnabled: rows.wake_word_enabled === "true",
+    wakeWordProvider: (rows.wake_word_provider as AppSettings["wakeWordProvider"]) || defaultSettings.wakeWordProvider,
+    wakeWordPythonPath: rows.wake_word_python_path || defaultSettings.wakeWordPythonPath,
+    wakeWordModel: rows.wake_word_model || defaultSettings.wakeWordModel,
+    wakeWordCustomModelPath: rows.wake_word_custom_model_path || "",
+    wakeWordThreshold: Number(rows.wake_word_threshold || defaultSettings.wakeWordThreshold),
     localWhisperExecutablePath: rows.local_whisper_executable_path || "",
     localWhisperModelPath: rows.local_whisper_model_path || "",
     localWhisperLanguage: rows.local_whisper_language || defaultSettings.localWhisperLanguage,
@@ -124,6 +154,16 @@ export async function saveSettings(settings: AppSettings): Promise<void> {
     setSetting("push_to_talk_enabled", String(settings.pushToTalkEnabled)),
     setSetting("voice_input_provider", settings.voiceInputProvider),
     setSetting("voice_output_provider", settings.voiceOutputProvider),
+    setSetting("openai_transcription_model", settings.openAiTranscriptionModel),
+    setSetting("voice_profile_enabled", String(settings.voiceProfileEnabled)),
+    setSetting("voice_profile_status", settings.voiceProfileStatus),
+    setSetting("voice_profile_calibration", settings.voiceProfileCalibration),
+    setSetting("wake_word_enabled", String(settings.wakeWordEnabled)),
+    setSetting("wake_word_provider", settings.wakeWordProvider),
+    setSetting("wake_word_python_path", settings.wakeWordPythonPath),
+    setSetting("wake_word_model", settings.wakeWordModel),
+    setSetting("wake_word_custom_model_path", settings.wakeWordCustomModelPath),
+    setSetting("wake_word_threshold", String(settings.wakeWordThreshold)),
     setSetting("local_whisper_executable_path", settings.localWhisperExecutablePath),
     setSetting("local_whisper_model_path", settings.localWhisperModelPath),
     setSetting("local_whisper_language", settings.localWhisperLanguage),

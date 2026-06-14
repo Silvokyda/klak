@@ -8,6 +8,7 @@ import {
   UserRound,
   Volume2
 } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
 import { useEffect, useRef, useState } from "react";
 import { ActionPreviewCard } from "../../components/ActionPreviewCard";
 import { ScreenHeader } from "../../components/ScreenHeader";
@@ -17,6 +18,8 @@ import { id, nowIso } from "../../lib/utils";
 import { buildActionPreviewForSuggestion } from "../../lib/tools/toolProposals";
 import { VoiceRecorder } from "../../components/VoiceRecorder";
 import { speakText } from "../../lib/voice/transcription";
+import { approveAction, denyAction } from "../../lib/permissions/policy";
+import { executeApprovedTool } from "../../lib/tools/toolExecutor";
 
 const starterPrompts = [
   "Remember that I prefer local-first tools.",
@@ -38,8 +41,14 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
   const [preview, setPreview] = useState<ActionPreview | null>(null);
   const [busy, setBusy] = useState(false);
   const [voiceMessage, setVoiceMessage] = useState<string | null>(null);
+  const [autoVoiceSignal, setAutoVoiceSignal] = useState(0);
 
   const threadRef = useRef<HTMLDivElement | null>(null);
+  const previewRef = useRef<ActionPreview | null>(null);
+
+  useEffect(() => {
+    previewRef.current = preview;
+  }, [preview]);
 
   useEffect(() => {
     const thread = threadRef.current;
@@ -47,13 +56,38 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
     thread.scrollTop = thread.scrollHeight;
   }, [messages, busy]);
 
-  async function submit() {
-    if (!input.trim() || busy) return;
+  useEffect(() => {
+    const unlisten = listen("klak-summoned", () => {
+      const spoken = speakText("I'm listening.", settings);
+      if (spoken) setVoiceMessage(spoken);
+      setAutoVoiceSignal((value) => value + 1);
+    });
+
+    return () => {
+      unlisten.then((dispose) => dispose());
+    };
+  }, [settings]);
+
+  async function submit(overrideText?: string) {
+    const content = (overrideText ?? input).trim();
+    if (!content || busy) return;
+
+    if (previewRef.current && looksLikeVoiceApproval(content)) {
+      await approvePreview(previewRef.current);
+      setInput("");
+      return;
+    }
+
+    if (previewRef.current && looksLikeVoiceDenial(content)) {
+      await denyPreview(previewRef.current);
+      setInput("");
+      return;
+    }
 
     const userMessage: ChatMessage = {
       id: id("msg"),
       role: "user",
-      content: input.trim(),
+      content,
       createdAt: nowIso()
     };
 
@@ -76,11 +110,62 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
 
       if (response.suggestedAction) {
         const nextPreview = await buildActionPreviewForSuggestion(response.suggestedAction, settings);
-        if (nextPreview) setPreview(nextPreview);
+        if (nextPreview) {
+          setPreview(nextPreview);
+          const spoken = speakText(`${nextPreview.message} Can I do this? Say yes or no.`, settings);
+          if (spoken) setVoiceMessage(spoken);
+        }
+      } else {
+        const spoken = speakText(response.message, settings);
+        if (spoken) setVoiceMessage(spoken);
       }
     } finally {
       setBusy(false);
     }
+  }
+
+  async function approvePreview(nextPreview: ActionPreview) {
+    setBusy(true);
+    setMessages((items) => [
+      ...items,
+      { id: id("msg"), role: "user", content: "Yes, do it.", createdAt: nowIso() }
+    ]);
+
+    try {
+      await approveAction(nextPreview.id);
+      await executeApprovedTool(nextPreview, settings);
+      setPreview(null);
+      const done = "Done.";
+      setMessages((items) => [
+        ...items,
+        { id: id("msg"), role: "assistant", content: done, createdAt: nowIso() }
+      ]);
+      const spoken = speakText(done, settings);
+      if (spoken) setVoiceMessage(spoken);
+    } catch (error) {
+      const failed = error instanceof Error ? error.message : String(error);
+      setMessages((items) => [
+        ...items,
+        { id: id("msg"), role: "assistant", content: `I couldn't complete that: ${failed}`, createdAt: nowIso() }
+      ]);
+      const spoken = speakText(`I couldn't complete that. ${failed}`, settings);
+      if (spoken) setVoiceMessage(spoken);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  async function denyPreview(nextPreview: ActionPreview) {
+    await denyAction(nextPreview.id);
+    setPreview(null);
+    const denied = "Okay, I won't do that.";
+    setMessages((items) => [
+      ...items,
+      { id: id("msg"), role: "user", content: "No.", createdAt: nowIso() },
+      { id: id("msg"), role: "assistant", content: denied, createdAt: nowIso() }
+    ]);
+    const spoken = speakText(denied, settings);
+    if (spoken) setVoiceMessage(spoken);
   }
 
   return (
@@ -217,7 +302,12 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
             onChange={(event) => setInput(event.target.value)}
             placeholder="Ask Klak to remember something, open an app, or help with a routine..."
           />
-          <VoiceRecorder settings={settings} onTranscript={(text) => setInput(text)} />
+          <VoiceRecorder
+            settings={settings}
+            onTranscript={(text) => submit(text)}
+            autoStartSignal={autoVoiceSignal}
+            autoStopAfterMs={6500}
+          />
         </div>
 
         <button className="primary send-button" disabled={busy || !input.trim()}>
@@ -229,4 +319,12 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
       {voiceMessage && <p className="warning">{voiceMessage}</p>}
     </div>
   );
+}
+
+function looksLikeVoiceApproval(text: string): boolean {
+  return /^(yes|yeah|yep|approve|approved|do it|go ahead|run it|open it|start it|please do|confirm)\b/i.test(text.trim());
+}
+
+function looksLikeVoiceDenial(text: string): boolean {
+  return /^(no|nope|deny|cancel|stop|don't|do not|never mind|nevermind)\b/i.test(text.trim());
 }

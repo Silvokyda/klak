@@ -1,6 +1,8 @@
 use tauri::menu::{Menu, MenuItem};
 use tauri::tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent};
-use tauri::Manager;
+use tauri::{
+    Emitter, LogicalPosition, LogicalSize, Manager, WebviewUrl, WebviewWindowBuilder, WindowEvent,
+};
 use tauri_plugin_sql::{Migration, MigrationKind};
 use wait_timeout::ChildExt;
 
@@ -9,7 +11,7 @@ use std::collections::HashMap;
 use std::fs;
 use std::fs::OpenOptions;
 use std::hash::{Hash, Hasher};
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::path::{Path, PathBuf};
 use std::process::{Child, Command, Stdio};
 use std::sync::{Mutex, OnceLock};
@@ -17,6 +19,7 @@ use std::thread;
 use std::time::{Duration, Instant};
 
 const KLAK_DB: &str = "sqlite:klak.db";
+const GLOW_WINDOW_LABEL: &str = "glow";
 
 const INITIAL_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS memories (
@@ -72,6 +75,7 @@ const BACKGROUND_OUTPUT_LIMIT: usize = 12_000;
 const BACKGROUND_LOG_FILE_LIMIT: u64 = 96_000;
 
 static BACKGROUND_CHILDREN: OnceLock<Mutex<HashMap<String, Child>>> = OnceLock::new();
+static WAKE_LISTENER_CHILD: OnceLock<Mutex<Option<Child>>> = OnceLock::new();
 
 #[derive(serde::Deserialize)]
 struct SaveTempAudioInput {
@@ -191,6 +195,20 @@ struct BackgroundProcessOutput {
     warning: Option<String>,
 }
 
+#[derive(serde::Deserialize)]
+struct StartWakeListenerInput {
+    python_executable_path: String,
+    model_name: String,
+    custom_model_path: Option<String>,
+    threshold: f32,
+}
+
+#[derive(serde::Serialize)]
+struct WakeListenerStatus {
+    running: bool,
+    message: String,
+}
+
 #[derive(serde::Serialize)]
 struct CommandRunOutput {
     exit_code: Option<i32>,
@@ -257,6 +275,90 @@ fn delete_secret(key: String) -> Result<(), String> {
 #[tauri::command]
 fn has_secret(key: String) -> Result<bool, String> {
     get_secret(key).map(|value| value.is_some())
+}
+
+#[tauri::command]
+fn summon_klak(app: tauri::AppHandle) -> Result<(), String> {
+    summon_klak_window(&app);
+    Ok(())
+}
+
+#[tauri::command]
+fn start_wake_listener(
+    app: tauri::AppHandle,
+    input: StartWakeListenerInput,
+) -> Result<WakeListenerStatus, String> {
+    let mut child_guard = wake_listener_child()
+        .lock()
+        .map_err(|_| "Wake listener registry is unavailable.".to_string())?;
+
+    if let Some(child) = child_guard.as_mut() {
+        if matches!(child.try_wait(), Ok(None)) {
+            return Ok(WakeListenerStatus {
+                running: true,
+                message: "Wake listener is already running.".into(),
+            });
+        }
+        *child_guard = None;
+    }
+
+    let python = input.python_executable_path.trim();
+    if python.is_empty() {
+        return Err("Python executable path is required for openWakeWord.".into());
+    }
+
+    let script_path = resolve_wake_listener_script(&app)?;
+    let mut command = Command::new(python);
+    command
+        .arg(script_path)
+        .arg("--model-name")
+        .arg(if input.model_name.trim().is_empty() {
+            "hey_jarvis"
+        } else {
+            input.model_name.trim()
+        })
+        .arg("--threshold")
+        .arg(input.threshold.clamp(0.2, 0.95).to_string())
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped());
+
+    if let Some(custom_model_path) = input.custom_model_path.as_deref() {
+        if !custom_model_path.trim().is_empty() {
+            command.arg("--custom-model-path").arg(custom_model_path.trim());
+        }
+    }
+
+    let mut child = command
+        .spawn()
+        .map_err(|error| format!("Unable to start openWakeWord sidecar: {error}"))?;
+
+    if let Some(stdout) = child.stdout.take() {
+        pipe_wake_listener_stdout(app.clone(), stdout);
+    }
+    if let Some(stderr) = child.stderr.take() {
+        pipe_wake_listener_stderr(stderr);
+    }
+
+    *child_guard = Some(child);
+    Ok(WakeListenerStatus {
+        running: true,
+        message: "Wake listener started.".into(),
+    })
+}
+
+#[tauri::command]
+fn stop_wake_listener() -> Result<(), String> {
+    let mut child_guard = wake_listener_child()
+        .lock()
+        .map_err(|_| "Wake listener registry is unavailable.".to_string())?;
+    if let Some(child) = child_guard.as_mut() {
+        if matches!(child.try_wait(), Ok(None)) {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+    *child_guard = None;
+    Ok(())
 }
 
 #[tauri::command]
@@ -661,6 +763,10 @@ fn resolve_program(program: &str) -> String {
 
 fn background_children() -> &'static Mutex<HashMap<String, Child>> {
     BACKGROUND_CHILDREN.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn wake_listener_child() -> &'static Mutex<Option<Child>> {
+    WAKE_LISTENER_CHILD.get_or_init(|| Mutex::new(None))
 }
 
 fn validate_launchable_app_path(path: &str) -> Result<PathBuf, String> {
@@ -1744,6 +1850,117 @@ fn truncate_for_ui(value: &str) -> String {
     }
 }
 
+fn resolve_wake_listener_script(app: &tauri::AppHandle) -> Result<PathBuf, String> {
+    let resource_path = app
+        .path()
+        .resolve("sidecar/wake_listener.py", tauri::path::BaseDirectory::Resource)
+        .ok();
+    if let Some(path) = resource_path {
+        if path.is_file() {
+            return Ok(path);
+        }
+    }
+
+    let dev_path = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("sidecar")
+        .join("wake_listener.py");
+    if dev_path.is_file() {
+        return Ok(dev_path);
+    }
+
+    Err("Unable to find sidecar/wake_listener.py. Rebuild Klak or check the sidecar files.".into())
+}
+
+fn pipe_wake_listener_stdout<R: Read + Send + 'static>(app: tauri::AppHandle, reader: R) {
+    thread::spawn(move || {
+        let buffered = BufReader::new(reader);
+        for line in buffered.lines().map_while(Result::ok) {
+            if line.contains("\"event\":\"wake\"") || line.contains("\"event\": \"wake\"") {
+                let _ = app.emit_to("main", "klak-wake-detected", line.clone());
+                summon_klak_window(&app);
+            } else if line.contains("\"event\":\"ready\"") || line.contains("\"event\": \"ready\"") {
+                let _ = app.emit_to("main", "klak-wake-listener-status", line.clone());
+            } else if line.contains("\"event\":\"error\"") || line.contains("\"event\": \"error\"") {
+                let _ = app.emit_to("main", "klak-wake-listener-error", line.clone());
+            }
+        }
+    });
+}
+
+fn pipe_wake_listener_stderr<R: Read + Send + 'static>(reader: R) {
+    thread::spawn(move || {
+        let buffered = BufReader::new(reader);
+        for line in buffered.lines().map_while(Result::ok) {
+            eprintln!("wake-listener: {line}");
+        }
+    });
+}
+
+fn summon_klak_window(app: &tauri::AppHandle) {
+    pulse_glow(app);
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+        let _ = app.emit_to("main", "klak-summoned", ());
+    }
+}
+
+fn pulse_glow(app: &tauri::AppHandle) {
+    let Some(glow) = app.get_webview_window(GLOW_WINDOW_LABEL) else {
+        return;
+    };
+
+    if let Ok(Some(monitor)) = glow.primary_monitor() {
+        let scale_factor = monitor.scale_factor();
+        let size = monitor.size();
+        let position = monitor.position();
+        let _ = glow.set_position(LogicalPosition::new(
+            position.x as f64 / scale_factor,
+            position.y as f64 / scale_factor,
+        ));
+        let _ = glow.set_size(LogicalSize::new(
+            size.width as f64 / scale_factor,
+            size.height as f64 / scale_factor,
+        ));
+    }
+
+    let _ = glow.set_ignore_cursor_events(true);
+    let _ = glow.set_always_on_top(true);
+    let _ = glow.show();
+    let _ = glow.emit("klak-glow-pulse", ());
+
+    let app_handle = app.clone();
+    thread::spawn(move || {
+        thread::sleep(Duration::from_millis(1350));
+        if let Some(glow) = app_handle.get_webview_window(GLOW_WINDOW_LABEL) {
+            let _ = glow.hide();
+        }
+    });
+}
+
+fn build_glow_window(app: &mut tauri::App) -> tauri::Result<()> {
+    let glow = WebviewWindowBuilder::new(
+        app,
+        GLOW_WINDOW_LABEL,
+        WebviewUrl::App("index.html?surface=glow".into()),
+    )
+    .title("Klak Glow")
+    .transparent(true)
+    .decorations(false)
+    .shadow(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .focusable(false)
+    .resizable(false)
+    .visible(false)
+    .inner_size(1280.0, 720.0)
+    .build()?;
+    let _ = glow.set_ignore_cursor_events(true);
+    Ok(())
+}
+
 pub fn run() {
     let migrations = vec![Migration {
         version: 1,
@@ -1778,20 +1995,35 @@ pub fn run() {
             read_background_process_output,
             save_temp_voice_audio,
             validate_whisper_setup,
-            transcribe_audio_with_whisper
+            transcribe_audio_with_whisper,
+            summon_klak,
+            start_wake_listener,
+            stop_wake_listener
         ])
+        .on_window_event(|window, event| {
+            if window.label() == "main" {
+                if let WindowEvent::CloseRequested { api, .. } = event {
+                    api.prevent_close();
+                    let _ = window.hide();
+                }
+            }
+        })
         .setup(|app| {
+            build_glow_window(app)?;
             let show = MenuItem::with_id(app, "show", "Show Klak", true, None::<&str>)?;
+            let summon = MenuItem::with_id(app, "summon", "Summon Klak", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
-            let menu = Menu::with_items(app, &[&show, &quit])?;
+            let menu = Menu::with_items(app, &[&summon, &show, &quit])?;
 
             let _tray = TrayIconBuilder::new()
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
+                    "summon" => summon_klak_window(app),
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
+                            let _ = window.unminimize();
                             let _ = window.set_focus();
                         }
                     }
@@ -1805,10 +2037,7 @@ pub fn run() {
                         ..
                     } = event
                     {
-                        if let Some(window) = tray.app_handle().get_webview_window("main") {
-                            let _ = window.show();
-                            let _ = window.set_focus();
-                        }
+                        summon_klak_window(tray.app_handle());
                     }
                 })
                 .build(app)?;
