@@ -113,7 +113,11 @@ export function VoiceRecorder({ settings, onTranscript, onStatus, autoStartSigna
       pcmChunksRef.current = [];
       recordingRef.current = true;
       setRecording(true);
-      report("Listening...");
+      report(
+        settings.voiceInputProvider === "local_whisper_cli"
+          ? "Listening locally... I will transcribe when this turn ends."
+          : "Listening..."
+      );
       await createActionLog({
         tool_name: "voice_recording_started",
         input_summary: realtime ? "streaming voice recording started" : "push-to-talk recording started",
@@ -162,7 +166,7 @@ export function VoiceRecorder({ settings, onTranscript, onStatus, autoStartSigna
       report("Live transcript was empty. Trying fallback transcription...");
     }
 
-    report("Transcribing...");
+    report(settings.voiceInputProvider === "local_whisper_cli" ? "Running local Whisper..." : "Transcribing...");
     const result = await getTranscriptionProvider(settings).transcribe({ audio, settings });
     if (result.text) {
       report(`Heard: ${result.text}`);

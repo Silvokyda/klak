@@ -1749,7 +1749,7 @@ fn transcribe_audio_with_whisper(input: WhisperInput) -> Result<WhisperOutput, S
         pipe.read_to_end(&mut stderr)
             .map_err(|error| format!("Unable to read local Whisper stderr: {error}"))?;
     }
-    let transcript_file = output_base.with_extension("txt");
+    let transcript_file = whisper_output_text_path(&output_base);
     let transcript = if transcript_file.exists() {
         fs::read_to_string(&transcript_file)
             .map_err(|error| format!("Unable to read Whisper transcript file: {error}"))?
@@ -1772,7 +1772,21 @@ fn transcribe_audio_with_whisper(input: WhisperInput) -> Result<WhisperOutput, S
         });
     }
     if transcript.trim().is_empty() {
-        return Err("Local Whisper completed but did not produce transcript text.".into());
+        let detail = if stderr.is_empty() {
+            format!(
+                "Expected transcript file: {}",
+                transcript_file.to_string_lossy()
+            )
+        } else {
+            format!(
+                "Expected transcript file: {}. Whisper stderr: {}",
+                transcript_file.to_string_lossy(),
+                truncate_for_ui(&stderr)
+            )
+        };
+        return Err(format!(
+            "Local Whisper completed but did not produce transcript text. {detail}"
+        ));
     }
 
     Ok(WhisperOutput {
@@ -1833,12 +1847,16 @@ fn cleanup_whisper_files(
     if keep_debug {
         return Ok(());
     }
-    for path in [audio_path.to_path_buf(), output_base.with_extension("txt")] {
+    for path in [audio_path.to_path_buf(), whisper_output_text_path(output_base)] {
         if path.exists() {
             fs::remove_file(path).map_err(|error| error.to_string())?;
         }
     }
     Ok(())
+}
+
+fn whisper_output_text_path(output_base: &Path) -> PathBuf {
+    PathBuf::from(format!("{}.txt", output_base.to_string_lossy()))
 }
 
 fn chrono_like_timestamp() -> u128 {
