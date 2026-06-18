@@ -1,9 +1,8 @@
-import { FolderOpen, Mic, UserRoundCheck } from "lucide-react";
-import { useRef, useState } from "react";
+import { FolderOpen } from "lucide-react";
+import { useState } from "react";
 import type { AppSettings, PermissionMode } from "../../types";
 import { apiKeyVault } from "../../lib/security/apiKeyVault";
 import { getSecretStorageStatus } from "../../lib/security/secretStore";
-import { createVoiceProfile, voiceProfileSummary } from "../../lib/voice/voiceProfile";
 
 const modes: PermissionMode[] = [
   "observe_only",
@@ -18,82 +17,17 @@ export function SetupFlow({ settings, onComplete }: { settings: AppSettings; onC
   const [draft, setDraft] = useState(settings);
   const [apiKey, setApiKey] = useState("");
   const [folder, setFolder] = useState("");
-  const [voiceSamples, setVoiceSamples] = useState<Blob[]>([]);
-  const [voiceProfileMessage, setVoiceProfileMessage] = useState<string | null>(null);
-  const [capturingVoiceSample, setCapturingVoiceSample] = useState(false);
-  const sampleRecorderRef = useRef<MediaRecorder | null>(null);
-  const sampleChunksRef = useRef<Blob[]>([]);
 
-  const finalStep = 8;
+  const finalStep = 7;
 
   async function finish() {
     if (apiKey.trim()) await apiKeyVault.saveApiKey(apiKey.trim());
-    onComplete({ ...draft, apiKeyStored: Boolean(apiKey.trim()) || draft.apiKeyStored, setupComplete: true });
-  }
-
-  async function captureVoiceSample() {
-    setVoiceProfileMessage(null);
-    if (!navigator.mediaDevices?.getUserMedia) {
-      setVoiceProfileMessage("Microphone recording is not available in this WebView.");
-      return;
-    }
-
-    try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
-      sampleChunksRef.current = [];
-      const recorder = new MediaRecorder(stream);
-      sampleRecorderRef.current = recorder;
-      recorder.ondataavailable = (event) => {
-        if (event.data.size > 0) sampleChunksRef.current.push(event.data);
-      };
-      recorder.onstop = () => {
-        stream.getTracks().forEach((track) => track.stop());
-      };
-      recorder.start();
-      setCapturingVoiceSample(true);
-      window.setTimeout(() => {
-        void stopVoiceSampleCapture();
-      }, 3200);
-    } catch (error) {
-      setVoiceProfileMessage(error instanceof Error ? error.message : String(error));
-    }
-  }
-
-  async function stopVoiceSampleCapture() {
-    const recorder = sampleRecorderRef.current;
-    if (!recorder || recorder.state === "inactive") return;
-
-    const stopped = new Promise<void>((resolve) => {
-      recorder.addEventListener("stop", () => resolve(), { once: true });
+    onComplete({
+      ...draft,
+      apiKeyStored: Boolean(apiKey.trim()) || draft.apiKeyStored,
+      setupComplete: true,
+      voiceProfileEnabled: false
     });
-    recorder.stop();
-    await stopped;
-    setCapturingVoiceSample(false);
-    const sample = new Blob(sampleChunksRef.current, { type: recorder.mimeType || "audio/webm" });
-    sampleChunksRef.current = [];
-    if (sample.size < 1000) {
-      setVoiceProfileMessage("That sample was too quiet or too short. Try again near the microphone.");
-      return;
-    }
-    setVoiceSamples((items) => [...items, sample].slice(-5));
-    setVoiceProfileMessage("Sample captured.");
-  }
-
-  async function enrollVoiceProfile() {
-    setVoiceProfileMessage("Creating local voice profile...");
-    try {
-      const calibration = await createVoiceProfile(voiceSamples, "Hi Klak");
-      setDraft({
-        ...draft,
-        voiceProfileEnabled: true,
-        voiceProfileStatus: "enrolled",
-        voiceProfileCalibration: calibration
-      });
-      setVoiceSamples([]);
-      setVoiceProfileMessage("Owner voice profile captured.");
-    } catch (error) {
-      setVoiceProfileMessage(error instanceof Error ? error.message : String(error));
-    }
   }
 
   return (
@@ -215,43 +149,6 @@ export function SetupFlow({ settings, onComplete }: { settings: AppSettings; onC
         )}
         {step === 6 && (
           <div className="setup-page">
-            <h2>Owner Voice Lock</h2>
-            <p>{voiceProfileSummary(draft)}</p>
-            <label className="toggle">
-              <input
-                type="checkbox"
-                checked={draft.voiceProfileEnabled}
-                onChange={(event) =>
-                  setDraft({
-                    ...draft,
-                    voiceProfileEnabled: event.target.checked,
-                    voiceProfileStatus: draft.voiceProfileCalibration ? "enrolled" : "not_enrolled"
-                  })
-                }
-              />
-              Require owner-like voice before Klak accepts spoken commands
-            </label>
-            <p>Say "Hi Klak, this is my voice" for each sample. Capture at least three samples.</p>
-            <div className="voice-profile-meter">
-              {[0, 1, 2].map((index) => (
-                <span key={index} className={voiceSamples.length > index ? "filled" : ""} />
-              ))}
-            </div>
-            <div className="row">
-              <button type="button" onClick={captureVoiceSample} disabled={capturingVoiceSample}>
-                <Mic size={16} />
-                {capturingVoiceSample ? "Listening" : "Capture sample"}
-              </button>
-              <button type="button" onClick={enrollVoiceProfile} disabled={voiceSamples.length < 3 || capturingVoiceSample}>
-                <UserRoundCheck size={16} />
-                Enroll voice
-              </button>
-            </div>
-            {voiceProfileMessage && <p className="inline-status">{voiceProfileMessage}</p>}
-          </div>
-        )}
-        {step === 7 && (
-          <div className="setup-page">
             <h2>Wake Word</h2>
             <label className="toggle">
               <input
@@ -287,7 +184,7 @@ export function SetupFlow({ settings, onComplete }: { settings: AppSettings; onC
             <p>Install dependencies with: pip install -r sidecar\\requirements-wakeword.txt</p>
           </div>
         )}
-        {step === 8 && (
+        {step === 7 && (
           <div className="setup-page">
             <h2>Finish Setup</h2>
             <p>Klak is ready with local memory, previews, audit logs, and safe tool defaults.</p>

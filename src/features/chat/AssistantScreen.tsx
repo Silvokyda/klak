@@ -9,6 +9,7 @@ import {
   Volume2
 } from "lucide-react";
 import { listen } from "@tauri-apps/api/event";
+import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { ActionPreviewCard } from "../../components/ActionPreviewCard";
 import { ScreenHeader } from "../../components/ScreenHeader";
@@ -60,7 +61,9 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
     const unlisten = listen("klak-summoned", () => {
       const spoken = speakText("I'm listening.", settings);
       if (spoken) setVoiceMessage(spoken);
-      setAutoVoiceSignal((value) => value + 1);
+      window.setTimeout(() => {
+        setAutoVoiceSignal((value) => value + 1);
+      }, 900);
     });
 
     return () => {
@@ -71,6 +74,7 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
   async function submit(overrideText?: string) {
     const content = (overrideText ?? input).trim();
     if (!content || busy) return;
+    void updateCaption(`Heard: ${content}`);
 
     if (previewRef.current && looksLikeVoiceApproval(content)) {
       await approvePreview(previewRef.current);
@@ -114,10 +118,15 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
           setPreview(nextPreview);
           const spoken = speakText(`${nextPreview.message} Can I do this? Say yes or no.`, settings);
           if (spoken) setVoiceMessage(spoken);
+          void updateCaption(`${nextPreview.message} Say yes or no.`);
+          window.setTimeout(() => {
+            setAutoVoiceSignal((value) => value + 1);
+          }, 2600);
         }
       } else {
         const spoken = speakText(response.message, settings);
         if (spoken) setVoiceMessage(spoken);
+        void updateCaption(response.message);
       }
     } finally {
       setBusy(false);
@@ -142,6 +151,7 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
       ]);
       const spoken = speakText(done, settings);
       if (spoken) setVoiceMessage(spoken);
+      void updateCaption(done);
     } catch (error) {
       const failed = error instanceof Error ? error.message : String(error);
       setMessages((items) => [
@@ -150,6 +160,7 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
       ]);
       const spoken = speakText(`I couldn't complete that. ${failed}`, settings);
       if (spoken) setVoiceMessage(spoken);
+      void updateCaption(`I couldn't complete that: ${failed}`);
     } finally {
       setBusy(false);
     }
@@ -166,6 +177,7 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
     ]);
     const spoken = speakText(denied, settings);
     if (spoken) setVoiceMessage(spoken);
+    void updateCaption(denied);
   }
 
   return (
@@ -305,8 +317,15 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
           <VoiceRecorder
             settings={settings}
             onTranscript={(text) => submit(text)}
+            onStatus={(message) => {
+              void updateCaption(message);
+              if (/failed|disabled|configure|api key|microphone|not available|ignored|match/i.test(message)) {
+                const spoken = speakText(message, settings);
+                if (spoken) setVoiceMessage(spoken);
+              }
+            }}
             autoStartSignal={autoVoiceSignal}
-            autoStopAfterMs={6500}
+            autoStopAfterMs={9000}
           />
         </div>
 
@@ -327,4 +346,12 @@ function looksLikeVoiceApproval(text: string): boolean {
 
 function looksLikeVoiceDenial(text: string): boolean {
   return /^(no|nope|deny|cancel|stop|don't|do not|never mind|nevermind)\b/i.test(text.trim());
+}
+
+async function updateCaption(text: string): Promise<void> {
+  try {
+    await invoke("update_voice_caption", { text: text.slice(0, 220) });
+  } catch {
+    // Caption overlay is a native enhancement; the assistant still works without it.
+  }
 }

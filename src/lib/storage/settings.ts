@@ -20,6 +20,9 @@ export type SettingKey =
   | "push_to_talk_enabled"
   | "voice_input_provider"
   | "voice_output_provider"
+  | "voice_output_voice_name"
+  | "voice_output_rate"
+  | "voice_output_pitch"
   | "openai_transcription_model"
   | "voice_profile_enabled"
   | "voice_profile_status"
@@ -52,6 +55,9 @@ export const defaultSettings: AppSettings = {
   pushToTalkEnabled: true,
   voiceInputProvider: "openai_transcription",
   voiceOutputProvider: "disabled",
+  voiceOutputVoiceName: "",
+  voiceOutputRate: 1,
+  voiceOutputPitch: 1,
   openAiTranscriptionModel: "gpt-4o-mini-transcribe",
   voiceProfileEnabled: false,
   voiceProfileStatus: "not_enrolled",
@@ -119,6 +125,9 @@ export async function loadSettings(): Promise<AppSettings> {
     pushToTalkEnabled: rows.push_to_talk_enabled !== "false",
     voiceInputProvider: (rows.voice_input_provider as AppSettings["voiceInputProvider"]) || defaultSettings.voiceInputProvider,
     voiceOutputProvider: (rows.voice_output_provider as AppSettings["voiceOutputProvider"]) || defaultSettings.voiceOutputProvider,
+    voiceOutputVoiceName: rows.voice_output_voice_name || defaultSettings.voiceOutputVoiceName,
+    voiceOutputRate: Number(rows.voice_output_rate || defaultSettings.voiceOutputRate),
+    voiceOutputPitch: Number(rows.voice_output_pitch || defaultSettings.voiceOutputPitch),
     openAiTranscriptionModel: rows.openai_transcription_model || defaultSettings.openAiTranscriptionModel,
     voiceProfileEnabled: rows.voice_profile_enabled === "true",
     voiceProfileStatus: (rows.voice_profile_status as AppSettings["voiceProfileStatus"]) || defaultSettings.voiceProfileStatus,
@@ -154,6 +163,9 @@ export async function saveSettings(settings: AppSettings): Promise<void> {
     setSetting("push_to_talk_enabled", String(settings.pushToTalkEnabled)),
     setSetting("voice_input_provider", settings.voiceInputProvider),
     setSetting("voice_output_provider", settings.voiceOutputProvider),
+    setSetting("voice_output_voice_name", settings.voiceOutputVoiceName),
+    setSetting("voice_output_rate", String(settings.voiceOutputRate)),
+    setSetting("voice_output_pitch", String(settings.voiceOutputPitch)),
     setSetting("openai_transcription_model", settings.openAiTranscriptionModel),
     setSetting("voice_profile_enabled", String(settings.voiceProfileEnabled)),
     setSetting("voice_profile_status", settings.voiceProfileStatus),

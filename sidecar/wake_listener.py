@@ -56,7 +56,11 @@ def main():
         audio_queue.put(bytes(indata))
 
     model = build_model(args)
-    write_event({"event": "ready", "model": args.custom_model_path or args.model_name})
+    write_event({
+        "event": "ready",
+        "model": args.custom_model_path or args.model_name,
+        "hint": "Say the configured model phrase, for example 'hey jarvis' for hey_jarvis."
+    })
     last_wake = 0.0
 
     with sd.RawInputStream(

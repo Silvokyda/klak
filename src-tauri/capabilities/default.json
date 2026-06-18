@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "Default Klak desktop capability set.",
-  "windows": ["main", "glow"],
+  "windows": ["main", "glow", "caption"],
   "permissions": [
     "core:default",
     "dialog:default",

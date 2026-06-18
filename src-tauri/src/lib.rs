@@ -20,6 +20,7 @@ use std::time::{Duration, Instant};
 
 const KLAK_DB: &str = "sqlite:klak.db";
 const GLOW_WINDOW_LABEL: &str = "glow";
+const CAPTION_WINDOW_LABEL: &str = "caption";
 
 const INITIAL_SCHEMA: &str = r#"
 CREATE TABLE IF NOT EXISTS memories (
@@ -284,6 +285,12 @@ fn summon_klak(app: tauri::AppHandle) -> Result<(), String> {
 }
 
 #[tauri::command]
+fn update_voice_caption(app: tauri::AppHandle, text: String) -> Result<(), String> {
+    show_voice_caption(&app, &text);
+    Ok(())
+}
+
+#[tauri::command]
 fn start_wake_listener(
     app: tauri::AppHandle,
     input: StartWakeListenerInput,
@@ -302,13 +309,13 @@ fn start_wake_listener(
         *child_guard = None;
     }
 
-    let python = input.python_executable_path.trim();
+    let python = resolve_wake_listener_python(input.python_executable_path.trim());
     if python.is_empty() {
         return Err("Python executable path is required for openWakeWord.".into());
     }
 
     let script_path = resolve_wake_listener_script(&app)?;
-    let mut command = Command::new(python);
+    let mut command = Command::new(&python);
     command
         .arg(script_path)
         .arg("--model-name")
@@ -1872,16 +1879,42 @@ fn resolve_wake_listener_script(app: &tauri::AppHandle) -> Result<PathBuf, Strin
     Err("Unable to find sidecar/wake_listener.py. Rebuild Klak or check the sidecar files.".into())
 }
 
+fn resolve_wake_listener_python(configured: &str) -> String {
+    let dev_python = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join("sidecar")
+        .join(".venv")
+        .join("Scripts")
+        .join("python.exe");
+
+    let should_use_dev_python = configured.is_empty()
+        || configured.eq_ignore_ascii_case("python")
+        || configured.eq_ignore_ascii_case("python.exe");
+
+    if should_use_dev_python && dev_python.is_file() {
+        return dev_python
+            .canonicalize()
+            .unwrap_or(dev_python)
+            .to_string_lossy()
+            .to_string();
+    }
+
+    configured.to_string()
+}
+
 fn pipe_wake_listener_stdout<R: Read + Send + 'static>(app: tauri::AppHandle, reader: R) {
     thread::spawn(move || {
         let buffered = BufReader::new(reader);
         for line in buffered.lines().map_while(Result::ok) {
             if line.contains("\"event\":\"wake\"") || line.contains("\"event\": \"wake\"") {
+                eprintln!("wake-listener: wake detected {line}");
                 let _ = app.emit_to("main", "klak-wake-detected", line.clone());
-                summon_klak_window(&app);
+                start_voice_session(&app);
             } else if line.contains("\"event\":\"ready\"") || line.contains("\"event\": \"ready\"") {
+                eprintln!("wake-listener: ready {line}");
                 let _ = app.emit_to("main", "klak-wake-listener-status", line.clone());
             } else if line.contains("\"event\":\"error\"") || line.contains("\"event\": \"error\"") {
+                eprintln!("wake-listener: error {line}");
                 let _ = app.emit_to("main", "klak-wake-listener-error", line.clone());
             }
         }
@@ -1905,6 +1938,12 @@ fn summon_klak_window(app: &tauri::AppHandle) {
         let _ = window.set_focus();
         let _ = app.emit_to("main", "klak-summoned", ());
     }
+}
+
+fn start_voice_session(app: &tauri::AppHandle) {
+    pulse_glow(app);
+    show_voice_caption(app, "I'm listening...");
+    let _ = app.emit_to("main", "klak-summoned", ());
 }
 
 fn pulse_glow(app: &tauri::AppHandle) {
@@ -1940,6 +1979,37 @@ fn pulse_glow(app: &tauri::AppHandle) {
     });
 }
 
+fn show_voice_caption(app: &tauri::AppHandle, text: &str) {
+    let Some(caption) = app.get_webview_window(CAPTION_WINDOW_LABEL) else {
+        return;
+    };
+
+    if let Ok(Some(monitor)) = caption.primary_monitor() {
+        let scale_factor = monitor.scale_factor();
+        let size = monitor.size();
+        let position = monitor.position();
+        let width = 720.0;
+        let height = 96.0;
+        let x = position.x as f64 / scale_factor + (size.width as f64 / scale_factor - width) / 2.0;
+        let y = position.y as f64 / scale_factor + (size.height as f64 / scale_factor - height) - 72.0;
+        let _ = caption.set_position(LogicalPosition::new(x, y));
+        let _ = caption.set_size(LogicalSize::new(width, height));
+    }
+
+    let _ = caption.set_ignore_cursor_events(true);
+    let _ = caption.set_always_on_top(true);
+    let _ = caption.show();
+    let _ = caption.emit("klak-caption-update", text.to_string());
+
+    let app_handle = app.clone();
+    thread::spawn(move || {
+        thread::sleep(Duration::from_secs(12));
+        if let Some(caption) = app_handle.get_webview_window(CAPTION_WINDOW_LABEL) {
+            let _ = caption.hide();
+        }
+    });
+}
+
 fn build_glow_window(app: &mut tauri::App) -> tauri::Result<()> {
     let glow = WebviewWindowBuilder::new(
         app,
@@ -1958,6 +2028,27 @@ fn build_glow_window(app: &mut tauri::App) -> tauri::Result<()> {
     .inner_size(1280.0, 720.0)
     .build()?;
     let _ = glow.set_ignore_cursor_events(true);
+    Ok(())
+}
+
+fn build_caption_window(app: &mut tauri::App) -> tauri::Result<()> {
+    let caption = WebviewWindowBuilder::new(
+        app,
+        CAPTION_WINDOW_LABEL,
+        WebviewUrl::App("index.html?surface=caption".into()),
+    )
+    .title("Klak Voice")
+    .transparent(true)
+    .decorations(false)
+    .shadow(false)
+    .always_on_top(true)
+    .skip_taskbar(true)
+    .focusable(false)
+    .resizable(false)
+    .visible(false)
+    .inner_size(720.0, 96.0)
+    .build()?;
+    let _ = caption.set_ignore_cursor_events(true);
     Ok(())
 }
 
@@ -1997,6 +2088,7 @@ pub fn run() {
             validate_whisper_setup,
             transcribe_audio_with_whisper,
             summon_klak,
+            update_voice_caption,
             start_wake_listener,
             stop_wake_listener
         ])
@@ -2010,16 +2102,19 @@ pub fn run() {
         })
         .setup(|app| {
             build_glow_window(app)?;
+            build_caption_window(app)?;
             let show = MenuItem::with_id(app, "show", "Show Klak", true, None::<&str>)?;
-            let summon = MenuItem::with_id(app, "summon", "Summon Klak", true, None::<&str>)?;
+            let summon = MenuItem::with_id(app, "summon", "Talk to Klak", true, None::<&str>)?;
             let quit = MenuItem::with_id(app, "quit", "Quit", true, None::<&str>)?;
             let menu = Menu::with_items(app, &[&summon, &show, &quit])?;
 
             let _tray = TrayIconBuilder::new()
+                .icon(tauri::include_image!("icons/32x32.png").clone())
+                .tooltip("Klak - say hey jarvis or click to talk")
                 .menu(&menu)
                 .show_menu_on_left_click(false)
                 .on_menu_event(|app, event| match event.id.as_ref() {
-                    "summon" => summon_klak_window(app),
+                    "summon" => start_voice_session(app),
                     "show" => {
                         if let Some(window) = app.get_webview_window("main") {
                             let _ = window.show();
@@ -2037,7 +2132,7 @@ pub fn run() {
                         ..
                     } = event
                     {
-                        summon_klak_window(tray.app_handle());
+                        start_voice_session(tray.app_handle());
                     }
                 })
                 .build(app)?;

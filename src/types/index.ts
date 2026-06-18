@@ -66,6 +66,9 @@ export interface AppSettings {
   pushToTalkEnabled: boolean;
   voiceInputProvider: "disabled" | "openai_transcription" | "local_whisper_cli";
   voiceOutputProvider: "disabled" | "web_speech";
+  voiceOutputVoiceName: string;
+  voiceOutputRate: number;
+  voiceOutputPitch: number;
   openAiTranscriptionModel: string;
   voiceProfileEnabled: boolean;
   voiceProfileStatus: "not_enrolled" | "enrolled";

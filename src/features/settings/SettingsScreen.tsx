@@ -10,7 +10,7 @@ import {
   UserRoundCheck,
   Trash2
 } from "lucide-react";
-import { useMemo, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import { ScreenHeader } from "../../components/ScreenHeader";
 import type { AppSettings, PermissionMode } from "../../types";
 import { apiKeyVault } from "../../lib/security/apiKeyVault";
@@ -57,10 +57,11 @@ export function SettingsScreen({
   settings: AppSettings;
   onSettingsChange: (settings: AppSettings) => void;
 }) {
-  const [draft, setDraft] = useState(settings);
+  const [draft, setDraft] = useState<AppSettings>({ ...settings, voiceProfileEnabled: false });
   const [apiKey, setApiKey] = useState("");
   const [message, setMessage] = useState<string | null>(null);
   const [whisperStatus, setWhisperStatus] = useState<string | null>(null);
+  const [speechVoices, setSpeechVoices] = useState<SpeechSynthesisVoice[]>([]);
   const [voiceSamples, setVoiceSamples] = useState<Blob[]>([]);
   const [voiceProfileMessage, setVoiceProfileMessage] = useState<string | null>(null);
   const [capturingVoiceSample, setCapturingVoiceSample] = useState(false);
@@ -73,6 +74,17 @@ export function SettingsScreen({
 
   const selectedPermissionMode = permissionModeDescriptions[draft.permissionMode];
 
+  useEffect(() => {
+    function loadSpeechVoices() {
+      if (!("speechSynthesis" in window)) return;
+      setSpeechVoices(window.speechSynthesis.getVoices());
+    }
+
+    loadSpeechVoices();
+    window.speechSynthesis?.addEventListener("voiceschanged", loadSpeechVoices);
+    return () => window.speechSynthesis?.removeEventListener("voiceschanged", loadSpeechVoices);
+  }, []);
+
   async function save() {
     setMessage(null);
 
@@ -84,7 +96,9 @@ export function SettingsScreen({
 
     const nextSettings = {
       ...draft,
-      apiKeyStored: draft.apiKeyStored || Boolean(nextApiKey)
+      apiKeyStored: draft.apiKeyStored || Boolean(nextApiKey),
+      voiceProfileEnabled: false,
+      voiceProfileStatus: draft.voiceProfileCalibration ? ("enrolled" as const) : ("not_enrolled" as const)
     };
 
     await Promise.resolve(onSettingsChange(nextSettings));
@@ -247,7 +261,7 @@ export function SettingsScreen({
           icon={<Mic size={18} />}
           label="Voice"
           value={draft.voiceEnabled ? "Enabled" : "Off"}
-          hint={draft.voiceProfileEnabled ? "Owner voice required" : "Voice lock optional"}
+          hint="Voice lock paused"
         />
       </section>
 
@@ -408,23 +422,10 @@ export function SettingsScreen({
             <div className="settings-note-card">
               <UserRoundCheck size={18} />
               <span>
-                Voice lock checks owner-like audio features locally before Klak sends audio for
-                transcription. It improves household privacy, but it is not a hard security boundary.
+                Voice lock is paused for now. Klak will transcribe commands without owner matching
+                while we tune a more reliable setup.
               </span>
             </div>
-
-            <ToggleRow
-              checked={draft.voiceProfileEnabled}
-              title="Require owner voice"
-              description="Ignore spoken commands that do not match the enrolled local voice profile."
-              onChange={(checked) =>
-                setDraft({
-                  ...draft,
-                  voiceProfileEnabled: checked,
-                  voiceProfileStatus: draft.voiceProfileCalibration ? "enrolled" : "not_enrolled"
-                })
-              }
-            />
 
             <div className="voice-profile-card">
               <div>
@@ -553,6 +554,76 @@ export function SettingsScreen({
                 <option value="web_speech">WebView speech synthesis</option>
               </select>
             </label>
+
+            {draft.voiceOutputProvider === "web_speech" && (
+              <>
+                <label className="field-stack">
+                  <span>Reply voice</span>
+                  <select
+                    value={draft.voiceOutputVoiceName}
+                    onChange={(event) =>
+                      setDraft({ ...draft, voiceOutputVoiceName: event.target.value })
+                    }
+                  >
+                    <option value="">System default</option>
+                    {speechVoices.map((voice) => (
+                      <option key={`${voice.name}-${voice.lang}`} value={voice.name}>
+                        {voice.name} ({voice.lang})
+                      </option>
+                    ))}
+                  </select>
+                  <small>
+                    These voices come from Windows/WebView. Install more Windows speech voices to
+                    make more options appear.
+                  </small>
+                </label>
+
+                <label className="field-stack">
+                  <span>Reply speed</span>
+                  <input
+                    type="range"
+                    min={0.6}
+                    max={1.4}
+                    step={0.05}
+                    value={draft.voiceOutputRate}
+                    onChange={(event) =>
+                      setDraft({ ...draft, voiceOutputRate: Number(event.target.value) || 1 })
+                    }
+                  />
+                  <small>{draft.voiceOutputRate.toFixed(2)}x</small>
+                </label>
+
+                <label className="field-stack">
+                  <span>Reply pitch</span>
+                  <input
+                    type="range"
+                    min={0.7}
+                    max={1.3}
+                    step={0.05}
+                    value={draft.voiceOutputPitch}
+                    onChange={(event) =>
+                      setDraft({ ...draft, voiceOutputPitch: Number(event.target.value) || 1 })
+                    }
+                  />
+                  <small>{draft.voiceOutputPitch.toFixed(2)}x</small>
+                </label>
+
+                <button
+                  type="button"
+                  onClick={() => {
+                    const utterance = new SpeechSynthesisUtterance("Hi, I am Klak.");
+                    const selectedVoice = speechVoices.find((voice) => voice.name === draft.voiceOutputVoiceName);
+                    if (selectedVoice) utterance.voice = selectedVoice;
+                    utterance.rate = draft.voiceOutputRate;
+                    utterance.pitch = draft.voiceOutputPitch;
+                    window.speechSynthesis.cancel();
+                    window.speechSynthesis.speak(utterance);
+                  }}
+                >
+                  Test reply voice
+                </button>
+              </>
+            )}
           </SettingsSection>
 
           <SettingsSection

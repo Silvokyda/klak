@@ -87,7 +87,11 @@ export const openAiTranscriptionProvider: VoiceTranscriptionProvider = {
       const data = await response.json();
       return { text: typeof data.text === "string" ? data.text.trim() : "" };
     } catch (error) {
-      return { text: "", error: error instanceof Error ? error.message : String(error) };
+      const message = error instanceof Error ? error.message : String(error);
+      const hint = /failed to fetch|network|load failed/i.test(message)
+        ? "OpenAI transcription could not reach the API. Check your internet connection and the Klak API base URL."
+        : message;
+      return { text: "", error: hint };
     }
   }
 };
@@ -118,8 +122,18 @@ export function speakText(text: string, settings: AppSettings): string | null {
   }
   window.speechSynthesis.cancel();
   const utterance = new SpeechSynthesisUtterance(text);
+  const voices = window.speechSynthesis.getVoices();
+  const selectedVoice = voices.find((voice) => voice.name === settings.voiceOutputVoiceName);
+  if (selectedVoice) utterance.voice = selectedVoice;
+  utterance.rate = clampSpeechValue(settings.voiceOutputRate, 0.6, 1.4, 1);
+  utterance.pitch = clampSpeechValue(settings.voiceOutputPitch, 0.7, 1.3, 1);
   window.speechSynthesis.speak(utterance);
   return null;
+}
+
+function clampSpeechValue(value: number, min: number, max: number, fallback: number): number {
+  if (!Number.isFinite(value)) return fallback;
+  return Math.min(max, Math.max(min, value));
 }
 
 function extensionFromMime(mimeType: string): string {
