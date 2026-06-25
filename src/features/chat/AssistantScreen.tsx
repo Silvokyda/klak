@@ -1,6 +1,7 @@
 import {
   Bot,
   ClipboardCheck,
+  PlayCircle,
   Search,
   Send,
   ShieldCheck,
@@ -12,8 +13,9 @@ import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
 import { useEffect, useRef, useState } from "react";
 import { ActionPreviewCard } from "../../components/ActionPreviewCard";
+import { OperatorTaskPanel } from "../../components/OperatorTaskPanel";
 import { ScreenHeader } from "../../components/ScreenHeader";
-import type { ActionPreview, AppSettings, ChatMessage } from "../../types";
+import type { ActionPreview, AppSettings, ChatMessage, OperatorTaskRunHydrated } from "../../types";
 import { sendChatMessage } from "../../lib/ai/chatOrchestrator";
 import { id, nowIso } from "../../lib/utils";
 import { buildActionPreviewForSuggestion } from "../../lib/tools/toolProposals";
@@ -21,6 +23,7 @@ import { VoiceRecorder } from "../../components/VoiceRecorder";
 import { speakText } from "../../lib/voice/transcription";
 import { approveAction, denyAction } from "../../lib/permissions/policy";
 import { executeApprovedTool } from "../../lib/tools/toolExecutor";
+import { createPlannedOperatorTask, runOperatorTask } from "../../lib/operator/operatorRuntime";
 
 const starterPrompts = [
   "Remember that I prefer local-first tools.",
@@ -34,7 +37,7 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
     {
       id: id("msg"),
       role: "assistant",
-      content: "Hi, I’m Klak. I can chat, search local memory, and preview safe local actions.",
+      content: "Hi, I'm Klak. I can chat, search local memory, preview safe local actions, and run bounded operator tasks.",
       createdAt: nowIso()
     }
   ]);
@@ -43,6 +46,7 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
   const [busy, setBusy] = useState(false);
   const [voiceMessage, setVoiceMessage] = useState<string | null>(null);
   const [autoVoiceSignal, setAutoVoiceSignal] = useState(0);
+  const [operatorRun, setOperatorRun] = useState<OperatorTaskRunHydrated | null>(null);
 
   const threadRef = useRef<HTMLDivElement | null>(null);
   const previewRef = useRef<ActionPreview | null>(null);
@@ -133,6 +137,51 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
     }
   }
 
+  async function runAsTask() {
+    const content = input.trim();
+    if (!content || busy) return;
+    setBusy(true);
+    setMessages((items) => [
+      ...items,
+      {
+        id: id("msg"),
+        role: "user",
+        content,
+        createdAt: nowIso()
+      }
+    ]);
+    setInput("");
+
+    try {
+      const planned = await createPlannedOperatorTask(content, settings);
+      setOperatorRun(planned);
+      const started = await runOperatorTask(planned.id, settings);
+      setOperatorRun(started);
+      setMessages((items) => [
+        ...items,
+        {
+          id: id("msg"),
+          role: "assistant",
+          content: `I created a bounded operator task with ${started.steps.length} step${started.steps.length === 1 ? "" : "s"}. Follow it in the task panel while I work through approvals, verification, and recovery.`,
+          createdAt: nowIso()
+        }
+      ]);
+    } catch (error) {
+      const failed = error instanceof Error ? error.message : String(error);
+      setMessages((items) => [
+        ...items,
+        {
+          id: id("msg"),
+          role: "assistant",
+          content: `I couldn't start that operator task: ${failed}`,
+          createdAt: nowIso()
+        }
+      ]);
+    } finally {
+      setBusy(false);
+    }
+  }
+
   async function approvePreview(nextPreview: ActionPreview) {
     setBusy(true);
     setMessages((items) => [
@@ -184,12 +233,18 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
     <div className="screen chat-screen operator-chat-screen">
       <ScreenHeader
         title="Assistant"
-        subtitle="Ask Klak to help with local memory, apps, routines, and approved actions."
+        subtitle="Ask Klak to help with local memory, apps, routines, approved actions, or bounded operator tasks."
         actions={
-          <button title="Search memory">
-            <Search size={16} />
-            Memory
-          </button>
+          <div className="header-action-row">
+            <button title="Search memory">
+              <Search size={16} />
+              Memory
+            </button>
+            <button className="primary" type="button" disabled={busy || !input.trim()} onClick={() => runAsTask()}>
+              <PlayCircle size={16} />
+              Run Task
+            </button>
+          </div>
         }
       />
 
@@ -213,8 +268,8 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
         <div className="operator-status-card">
           <Sparkles size={18} />
           <div>
-            <strong>Ready</strong>
-            <span>Ask naturally. You stay in control.</span>
+            <strong>Operator ready</strong>
+            <span>Run a bounded task when you want observe-plan-act-verify execution.</span>
           </div>
         </div>
       </div>
@@ -295,11 +350,13 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
             <div className="empty-action-state">
               <ShieldCheck size={28} />
               <strong>No pending action</strong>
-              <p>When Klak wants to open an app, save memory, run a routine, or copy text, you’ll review it here first.</p>
+              <p>When Klak wants to open an app, save memory, run a routine, or copy text, you'll review it here first.</p>
             </div>
           )}
         </aside>
       </div>
+
+      <OperatorTaskPanel run={operatorRun} settings={settings} onChange={setOperatorRun} />
 
       <form
         className="operator-composer"
@@ -312,7 +369,7 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
           <input
             value={input}
             onChange={(event) => setInput(event.target.value)}
-            placeholder="Ask Klak to remember something, open an app, or help with a routine..."
+            placeholder="Ask Klak to remember something, open an app, help with a routine, or run a task..."
           />
           <VoiceRecorder
             settings={settings}
@@ -332,6 +389,10 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
         <button className="primary send-button" disabled={busy || !input.trim()}>
           <Send size={16} />
           {busy ? "Sending" : "Send"}
+        </button>
+        <button className="send-button secondary" type="button" disabled={busy || !input.trim()} onClick={() => runAsTask()}>
+          <PlayCircle size={16} />
+          Run Task
         </button>
       </form>
 

@@ -129,4 +129,49 @@ CREATE TABLE IF NOT EXISTS workflows (
   last_run_at TEXT,
   run_count INTEGER DEFAULT 0
 );
+
+CREATE TABLE IF NOT EXISTS operator_task_runs (
+  id TEXT PRIMARY KEY,
+  goal TEXT NOT NULL,
+  mode TEXT NOT NULL,
+  status TEXT NOT NULL,
+  scope_json TEXT NOT NULL,
+  plan_json TEXT NOT NULL,
+  current_step_id TEXT,
+  approvals_json TEXT NOT NULL,
+  verification_state_json TEXT NOT NULL,
+  retries_json TEXT NOT NULL,
+  final_report TEXT,
+  failure_class TEXT,
+  started_at TEXT NOT NULL,
+  completed_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS operator_task_steps (
+  id TEXT PRIMARY KEY,
+  task_run_id TEXT NOT NULL,
+  order_index INTEGER NOT NULL,
+  title TEXT NOT NULL,
+  kind TEXT NOT NULL,
+  intent TEXT NOT NULL,
+  execution_method TEXT NOT NULL,
+  fallback_methods_json TEXT NOT NULL,
+  inputs_json TEXT NOT NULL,
+  verification_json TEXT NOT NULL,
+  approval_required TEXT NOT NULL,
+  status TEXT NOT NULL,
+  retry_count INTEGER DEFAULT 0,
+  max_retries INTEGER DEFAULT 0,
+  verification_status TEXT NOT NULL,
+  checkpoint_json TEXT,
+  result_summary TEXT,
+  failure_class TEXT,
+  action_log_ids_json TEXT NOT NULL,
+  started_at TEXT,
+  completed_at TEXT,
+  created_at TEXT NOT NULL,
+  updated_at TEXT NOT NULL
+);
 `;

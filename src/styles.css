@@ -6122,3 +6122,186 @@ textarea {
     width: 100%;
   }
 }
+
+.header-action-row {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.send-button.secondary {
+  background: #eef3f5;
+  border-color: #d7e0e8;
+  color: #334253;
+}
+
+.operator-task-panel {
+  background: #ffffff;
+  border: 1px solid #dde3ea;
+  border-radius: 18px;
+  padding: 18px;
+  display: grid;
+  gap: 18px;
+}
+
+.operator-task-panel.empty {
+  min-height: 180px;
+}
+
+.operator-task-hero {
+  display: flex;
+  justify-content: space-between;
+  gap: 16px;
+  align-items: flex-start;
+}
+
+.operator-task-hero h3 {
+  margin: 10px 0 0;
+}
+
+.operator-task-hero p,
+.operator-current-step p {
+  margin: 0;
+  color: #5f6f80;
+  line-height: 1.5;
+}
+
+.operator-task-progress {
+  min-width: 110px;
+  border: 1px solid #dde3ea;
+  border-radius: 16px;
+  padding: 14px;
+  background: #f8fafb;
+  display: grid;
+  gap: 3px;
+  text-align: center;
+}
+
+.operator-task-progress strong {
+  font-size: 28px;
+  line-height: 1;
+}
+
+.operator-current-step {
+  border: 1px solid #dde3ea;
+  border-radius: 16px;
+  padding: 16px;
+  background: linear-gradient(135deg, rgba(47, 125, 85, 0.06), #ffffff);
+  display: grid;
+  gap: 12px;
+}
+
+.operator-step-header {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  align-items: flex-start;
+}
+
+.operator-step-header small,
+.operator-step-meta span,
+.operator-plan-item span {
+  color: #6d7d8b;
+  font-size: 12px;
+}
+
+.operator-step-header h4 {
+  margin: 4px 0 0;
+}
+
+.operator-step-meta {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.operator-step-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.operator-task-grid {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 16px;
+}
+
+.operator-plan-list {
+  border: 1px solid #dde3ea;
+  border-radius: 16px;
+  padding: 16px;
+  background: #f8fafb;
+  display: grid;
+  gap: 14px;
+}
+
+.operator-plan-items {
+  display: grid;
+  gap: 12px;
+}
+
+.operator-plan-item {
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
+  gap: 10px;
+  align-items: start;
+  border: 1px solid #dde3ea;
+  border-radius: 14px;
+  padding: 12px;
+  background: #ffffff;
+}
+
+.operator-plan-item strong,
+.operator-report {
+  color: #1b2430;
+}
+
+.operator-plan-item p {
+  margin: 4px 0;
+  color: #5f6f80;
+  line-height: 1.45;
+}
+
+.operator-plan-marker {
+  width: 32px;
+  height: 32px;
+  border-radius: 999px;
+  background: #eef3f5;
+  border: 1px solid #dde3ea;
+  display: grid;
+  place-items: center;
+}
+
+.operator-report {
+  margin: 0;
+  white-space: pre-wrap;
+  line-height: 1.5;
+  font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace;
+  background: #ffffff;
+  border: 1px solid #dde3ea;
+  border-radius: 14px;
+  padding: 14px;
+  min-height: 180px;
+}
+
+.status-awaiting_approval,
+.status-awaiting_manual {
+  border-color: #f1d28b;
+}
+
+.status-failed,
+.status-blocked {
+  border-color: #e3b9b9;
+}
+
+@media (max-width: 960px) {
+  .operator-task-grid {
+    grid-template-columns: 1fr;
+  }
+
+  .operator-task-hero,
+  .operator-step-header {
+    display: grid;
+  }
+}

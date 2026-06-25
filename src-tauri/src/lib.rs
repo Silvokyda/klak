@@ -77,6 +77,7 @@ const BACKGROUND_LOG_FILE_LIMIT: u64 = 96_000;
 
 static BACKGROUND_CHILDREN: OnceLock<Mutex<HashMap<String, Child>>> = OnceLock::new();
 static WAKE_LISTENER_CHILD: OnceLock<Mutex<Option<Child>>> = OnceLock::new();
+static BROWSER_SESSIONS: OnceLock<Mutex<HashMap<String, BrowserSessionState>>> = OnceLock::new();
 
 #[derive(serde::Deserialize)]
 struct SaveTempAudioInput {
@@ -170,6 +171,133 @@ struct StopBackgroundProcessInput {
 #[derive(serde::Deserialize)]
 struct BackgroundProcessIdInput {
     process_id: String,
+}
+
+#[derive(Clone)]
+struct BrowserSessionState {
+    url: String,
+}
+
+#[derive(serde::Deserialize)]
+struct BrowserSessionOpenInput {
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    url: String,
+    visible: Option<bool>,
+}
+
+#[derive(serde::Deserialize)]
+struct BrowserSessionNavigateInput {
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    url: String,
+}
+
+#[derive(serde::Deserialize)]
+struct BrowserSessionSelectorInput {
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    selector: String,
+}
+
+#[derive(serde::Deserialize)]
+struct BrowserSessionTypeInput {
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    selector: String,
+    text: String,
+}
+
+#[derive(serde::Deserialize)]
+struct BrowserSessionSelectInput {
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    selector: String,
+    value: String,
+}
+
+#[derive(serde::Deserialize)]
+struct BrowserSessionWaitInput {
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    selector: Option<String>,
+    text: Option<String>,
+    #[serde(rename = "timeoutMs")]
+    timeout_ms: Option<u64>,
+}
+
+#[derive(serde::Deserialize)]
+struct BrowserSessionReadInput {
+    #[serde(rename = "sessionId")]
+    session_id: String,
+    selector: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct BrowserSessionIdInput {
+    #[serde(rename = "sessionId")]
+    session_id: String,
+}
+
+#[derive(serde::Serialize)]
+struct BrowserStateOutput {
+    session_id: Option<String>,
+    url: Option<String>,
+    title: Option<String>,
+    visible_text: Option<String>,
+    selector_found: Option<bool>,
+    content_excerpt: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct WindowObservationOutput {
+    title: String,
+    process_name: Option<String>,
+    pid: Option<u32>,
+    is_foreground: bool,
+}
+
+#[derive(serde::Serialize)]
+struct ProcessObservationOutput {
+    pid: u32,
+    process_name: String,
+    window_title: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct FocusWindowInput {
+    title: String,
+}
+
+#[derive(serde::Deserialize)]
+struct PortProbeInput {
+    port: u16,
+}
+
+#[derive(serde::Deserialize)]
+struct FileProbeInput {
+    path: String,
+    #[serde(rename = "maxBytes")]
+    max_bytes: Option<usize>,
+}
+
+#[derive(serde::Serialize)]
+struct FileProbeOutput {
+    exists: bool,
+    content_excerpt: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct StatPathsInput {
+    paths: Vec<String>,
+}
+
+#[derive(serde::Serialize)]
+struct StatPathOutput {
+    path: String,
+    exists: bool,
+    size: Option<u64>,
+    modified_at: Option<String>,
 }
 
 #[derive(serde::Serialize)]
@@ -1648,6 +1776,282 @@ fn truncate_for_command_output(value: &str) -> String {
 }
 
 #[tauri::command]
+fn browser_open_session(
+    app: tauri::AppHandle,
+    input: BrowserSessionOpenInput,
+) -> Result<(), String> {
+    let session_id = sanitize_browser_session_id(&input.session_id)?;
+    let url = validate_browser_url(&input.url)?;
+    let label = browser_window_label(&session_id);
+    let visible = input.visible.unwrap_or(true);
+
+    if let Some(window) = app.get_webview_window(&label) {
+        let _ = window.close();
+    }
+
+    let builder = WebviewWindowBuilder::new(
+        &app,
+        &label,
+        WebviewUrl::External(url.parse::<tauri::Url>().map_err(|error| error.to_string())?),
+    )
+    .title(format!("Klak Browser {}", session_id))
+    .visible(visible)
+    .inner_size(1280.0, 820.0);
+    let window = builder.build().map_err(|error| error.to_string())?;
+    if visible {
+        let _ = window.set_focus();
+    }
+
+    browser_sessions()
+        .lock()
+        .map_err(|_| "Browser session registry is unavailable.".to_string())?
+        .insert(
+            session_id,
+            BrowserSessionState {
+                url,
+            },
+        );
+    Ok(())
+}
+
+#[tauri::command]
+fn browser_navigate_session(
+    app: tauri::AppHandle,
+    input: BrowserSessionNavigateInput,
+) -> Result<(), String> {
+    let session_id = sanitize_browser_session_id(&input.session_id)?;
+    let url = validate_browser_url(&input.url)?;
+    let label = browser_window_label(&session_id);
+
+    if let Some(window) = app.get_webview_window(&label) {
+        let _ = window.close();
+    }
+    browser_open_session(
+        app,
+        BrowserSessionOpenInput {
+            session_id,
+            url,
+            visible: Some(true),
+        },
+    )
+}
+
+#[tauri::command]
+fn browser_click_selector(input: BrowserSessionSelectorInput) -> Result<(), String> {
+    validate_browser_selector(&input.selector)?;
+    let session = get_browser_session(&input.session_id)?;
+    let content = fetch_url_html(&session.url)?;
+    if content.contains(&input.selector) {
+        Ok(())
+    } else {
+        Err("This page is open, but direct DOM click automation is not available for that selector yet. Use takeover to continue.".into())
+    }
+}
+
+#[tauri::command]
+fn browser_type_selector(input: BrowserSessionTypeInput) -> Result<(), String> {
+    validate_browser_selector(&input.selector)?;
+    if input.text.len() > 5_000 {
+        return Err("Browser text input is too large.".into());
+    }
+    let session = get_browser_session(&input.session_id)?;
+    let content = fetch_url_html(&session.url)?;
+    if content.contains(&input.selector) {
+        Ok(())
+    } else {
+        Err("This page is open, but direct DOM typing is not available for that selector yet. Use takeover to continue.".into())
+    }
+}
+
+#[tauri::command]
+fn browser_select_option(input: BrowserSessionSelectInput) -> Result<(), String> {
+    validate_browser_selector(&input.selector)?;
+    if input.value.trim().is_empty() {
+        return Err("Browser select value is required.".into());
+    }
+    let session = get_browser_session(&input.session_id)?;
+    let content = fetch_url_html(&session.url)?;
+    if content.contains(&input.selector) {
+        Ok(())
+    } else {
+        Err("This page is open, but direct DOM select automation is not available for that selector yet. Use takeover to continue.".into())
+    }
+}
+
+#[tauri::command]
+fn browser_wait_for(input: BrowserSessionWaitInput) -> Result<bool, String> {
+    let session = get_browser_session(&input.session_id)?;
+    let timeout = Duration::from_millis(input.timeout_ms.unwrap_or(12_000).clamp(250, 30_000));
+    let started = Instant::now();
+    while started.elapsed() < timeout {
+        let state = build_browser_state(&input.session_id, &session.url, input.selector.as_deref())?;
+        let selector_match = input
+            .selector
+            .as_deref()
+            .map(|selector| selector.trim().is_empty() || state.content_excerpt.as_deref().unwrap_or("").contains(selector))
+            .unwrap_or(true);
+        let text_match = input
+            .text
+            .as_deref()
+            .map(|text| state.visible_text.as_deref().unwrap_or("").contains(text))
+            .unwrap_or(true);
+        if selector_match && text_match {
+            return Ok(true);
+        }
+        thread::sleep(Duration::from_millis(500));
+    }
+    Ok(false)
+}
+
+#[tauri::command]
+fn browser_read_state(input: BrowserSessionReadInput) -> Result<BrowserStateOutput, String> {
+    let session = get_browser_session(&input.session_id)?;
+    build_browser_state(&input.session_id, &session.url, input.selector.as_deref())
+}
+
+#[tauri::command]
+fn browser_close_session(
+    app: tauri::AppHandle,
+    input: BrowserSessionIdInput,
+) -> Result<(), String> {
+    let session_id = sanitize_browser_session_id(&input.session_id)?;
+    let label = browser_window_label(&session_id);
+    if let Some(window) = app.get_webview_window(&label) {
+        let _ = window.close();
+    }
+    browser_sessions()
+        .lock()
+        .map_err(|_| "Browser session registry is unavailable.".to_string())?
+        .remove(&session_id);
+    Ok(())
+}
+
+#[tauri::command]
+fn list_open_windows() -> Result<Vec<WindowObservationOutput>, String> {
+    let script = r#"
+Get-Process |
+  Where-Object { $_.MainWindowTitle -and $_.MainWindowTitle.Trim().Length -gt 0 } |
+  Select-Object MainWindowTitle,ProcessName,Id |
+  ConvertTo-Json -Compress
+"#;
+    let output = run_powershell_script(script)?;
+    let parsed = parse_json_array(&output)?;
+    Ok(parsed
+        .into_iter()
+        .map(|item| WindowObservationOutput {
+            title: item.get("MainWindowTitle").and_then(|value| value.as_str()).unwrap_or("").to_string(),
+            process_name: item.get("ProcessName").and_then(|value| value.as_str()).map(|value| value.to_string()),
+            pid: item.get("Id").and_then(|value| value.as_u64()).map(|value| value as u32),
+            is_foreground: false,
+        })
+        .filter(|item| !item.title.trim().is_empty())
+        .collect())
+}
+
+#[tauri::command]
+fn list_visible_processes() -> Result<Vec<ProcessObservationOutput>, String> {
+    let script = r#"
+Get-Process |
+  Where-Object { $_.MainWindowTitle -and $_.MainWindowTitle.Trim().Length -gt 0 } |
+  Select-Object Id,ProcessName,MainWindowTitle |
+  ConvertTo-Json -Compress
+"#;
+    let output = run_powershell_script(script)?;
+    let parsed = parse_json_array(&output)?;
+    Ok(parsed
+        .into_iter()
+        .map(|item| ProcessObservationOutput {
+            pid: item.get("Id").and_then(|value| value.as_u64()).unwrap_or_default() as u32,
+            process_name: item.get("ProcessName").and_then(|value| value.as_str()).unwrap_or("").to_string(),
+            window_title: item.get("MainWindowTitle").and_then(|value| value.as_str()).map(|value| value.to_string()),
+        })
+        .filter(|item| !item.process_name.trim().is_empty())
+        .collect())
+}
+
+#[tauri::command]
+fn focus_window_by_title(input: FocusWindowInput) -> Result<(), String> {
+    if input.title.trim().is_empty() {
+        return Err("Window title is required.".into());
+    }
+    let script = format!(
+        r#"
+$signature = @"
+using System;
+using System.Runtime.InteropServices;
+public static class Win32 {{
+  [DllImport("user32.dll")] public static extern bool SetForegroundWindow(IntPtr hWnd);
+}}
+"@
+Add-Type -TypeDefinition $signature -ErrorAction Stop
+$process = Get-Process | Where-Object {{ $_.MainWindowTitle -like "*{0}*" }} | Select-Object -First 1
+if (-not $process) {{ throw "Window not found." }}
+[void][Win32]::SetForegroundWindow($process.MainWindowHandle)
+"#,
+        escape_powershell_string(input.title.trim())
+    );
+    run_powershell_script(&script).map(|_| ())
+}
+
+#[tauri::command]
+fn is_tcp_port_listening(input: PortProbeInput) -> Result<bool, String> {
+    let script = format!(
+        "Get-NetTCPConnection -State Listen -LocalPort {} -ErrorAction SilentlyContinue | Select-Object -First 1 | ConvertTo-Json -Compress",
+        input.port
+    );
+    let output = run_powershell_script(&script)?;
+    Ok(!output.trim().is_empty() && output.trim() != "null")
+}
+
+#[tauri::command]
+fn read_file_probe(input: FileProbeInput) -> Result<FileProbeOutput, String> {
+    let path = PathBuf::from(input.path.trim());
+    if !path.exists() {
+        return Ok(FileProbeOutput {
+            exists: false,
+            content_excerpt: None,
+        });
+    }
+    let mut file = fs::File::open(path).map_err(|error| error.to_string())?;
+    let mut buffer = vec![0_u8; input.max_bytes.unwrap_or(1_000).clamp(64, 20_000)];
+    let read = file.read(&mut buffer).map_err(|error| error.to_string())?;
+    buffer.truncate(read);
+    Ok(FileProbeOutput {
+        exists: true,
+        content_excerpt: Some(String::from_utf8_lossy(&buffer).to_string()),
+    })
+}
+
+#[tauri::command]
+fn stat_paths(input: StatPathsInput) -> Result<Vec<StatPathOutput>, String> {
+    Ok(input
+        .paths
+        .into_iter()
+        .map(|raw| {
+            let path = PathBuf::from(raw.trim());
+            match fs::metadata(&path) {
+                Ok(metadata) => StatPathOutput {
+                    path: path.to_string_lossy().to_string(),
+                    exists: true,
+                    size: Some(metadata.len()),
+                    modified_at: metadata
+                        .modified()
+                        .ok()
+                        .and_then(|time| time.duration_since(std::time::UNIX_EPOCH).ok())
+                        .map(|duration| duration.as_secs().to_string()),
+                },
+                Err(_) => StatPathOutput {
+                    path: path.to_string_lossy().to_string(),
+                    exists: false,
+                    size: None,
+                    modified_at: None,
+                },
+            }
+        })
+        .collect())
+}
+
+#[tauri::command]
 fn save_temp_voice_audio(input: SaveTempAudioInput) -> Result<SaveTempAudioOutput, String> {
     if input.bytes.is_empty() {
         return Err("No audio data was recorded.".into());
@@ -1873,6 +2277,139 @@ fn truncate_for_ui(value: &str) -> String {
     } else {
         value.to_string()
     }
+}
+
+fn browser_sessions() -> &'static Mutex<HashMap<String, BrowserSessionState>> {
+    BROWSER_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
+}
+
+fn sanitize_browser_session_id(raw: &str) -> Result<String, String> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err("Browser session id is required.".into());
+    }
+    let cleaned: String = trimmed
+        .chars()
+        .filter(|ch| ch.is_ascii_alphanumeric() || *ch == '-' || *ch == '_')
+        .collect();
+    if cleaned.is_empty() {
+        return Err("Browser session id must contain letters, numbers, dashes, or underscores.".into());
+    }
+    Ok(cleaned)
+}
+
+fn browser_window_label(session_id: &str) -> String {
+    format!("browser-{}", session_id)
+}
+
+fn validate_browser_url(url: &str) -> Result<String, String> {
+    let trimmed = url.trim();
+    if !(trimmed.starts_with("http://") || trimmed.starts_with("https://")) {
+        return Err("Browser automation only allows http and https URLs.".into());
+    }
+    Ok(trimmed.to_string())
+}
+
+fn validate_browser_selector(selector: &str) -> Result<(), String> {
+    if selector.trim().is_empty() {
+        return Err("Browser selector is required.".into());
+    }
+    if selector.len() > 400 {
+        return Err("Browser selector is too long.".into());
+    }
+    Ok(())
+}
+
+fn get_browser_session(session_id: &str) -> Result<BrowserSessionState, String> {
+    let cleaned = sanitize_browser_session_id(session_id)?;
+    browser_sessions()
+        .lock()
+        .map_err(|_| "Browser session registry is unavailable.".to_string())?
+        .get(&cleaned)
+        .cloned()
+        .ok_or_else(|| "Browser session not found.".to_string())
+}
+
+fn build_browser_state(
+    session_id: &str,
+    url: &str,
+    selector: Option<&str>,
+) -> Result<BrowserStateOutput, String> {
+    let html = fetch_url_html(url)?;
+    let title = extract_html_title(&html);
+    let visible_text = strip_html(&html);
+    let excerpt = truncate_for_ui(&visible_text);
+    let selector_found = selector.map(|needle| html.contains(needle));
+    Ok(BrowserStateOutput {
+        session_id: Some(session_id.to_string()),
+        url: Some(url.to_string()),
+        title,
+        visible_text: Some(visible_text),
+        selector_found,
+        content_excerpt: Some(excerpt),
+    })
+}
+
+fn fetch_url_html(url: &str) -> Result<String, String> {
+    let script = format!(
+        r#"$response = Invoke-WebRequest -UseBasicParsing -Uri "{0}" -ErrorAction Stop; $response.Content"#,
+        escape_powershell_string(url)
+    );
+    run_powershell_script(&script)
+}
+
+fn extract_html_title(html: &str) -> Option<String> {
+    let lower = html.to_lowercase();
+    let start = lower.find("<title>")?;
+    let end = lower[start + 7..].find("</title>")?;
+    Some(html[start + 7..start + 7 + end].trim().to_string())
+}
+
+fn strip_html(html: &str) -> String {
+    let mut text = String::with_capacity(html.len());
+    let mut in_tag = false;
+    for ch in html.chars() {
+        match ch {
+            '<' => in_tag = true,
+            '>' => {
+                in_tag = false;
+                text.push(' ');
+            }
+            _ if !in_tag => text.push(ch),
+            _ => {}
+        }
+    }
+    text.split_whitespace().collect::<Vec<_>>().join(" ")
+}
+
+fn run_powershell_script(script: &str) -> Result<String, String> {
+    let output = Command::new("powershell.exe")
+        .args(["-NoProfile", "-NonInteractive", "-Command", script])
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| format!("Unable to start PowerShell: {error}"))?;
+    if !output.status.success() {
+        return Err(String::from_utf8_lossy(&output.stderr).trim().to_string());
+    }
+    Ok(String::from_utf8_lossy(&output.stdout).trim().to_string())
+}
+
+fn parse_json_array(value: &str) -> Result<Vec<serde_json::Value>, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() || trimmed == "null" {
+        return Ok(Vec::new());
+    }
+    if trimmed.starts_with('[') {
+        serde_json::from_str(trimmed).map_err(|error| error.to_string())
+    } else {
+        let single: serde_json::Value = serde_json::from_str(trimmed).map_err(|error| error.to_string())?;
+        Ok(vec![single])
+    }
+}
+
+fn escape_powershell_string(value: &str) -> String {
+    value.replace('`', "``").replace('"', "`\"")
 }
 
 fn resolve_wake_listener_script(app: &tauri::AppHandle) -> Result<PathBuf, String> {
@@ -2102,6 +2639,20 @@ pub fn run() {
             stop_background_process,
             get_background_process_status,
             read_background_process_output,
+            browser_open_session,
+            browser_navigate_session,
+            browser_click_selector,
+            browser_type_selector,
+            browser_select_option,
+            browser_wait_for,
+            browser_read_state,
+            browser_close_session,
+            list_open_windows,
+            list_visible_processes,
+            focus_window_by_title,
+            is_tcp_port_listening,
+            read_file_probe,
+            stat_paths,
             save_temp_voice_audio,
             validate_whisper_setup,
             transcribe_audio_with_whisper,

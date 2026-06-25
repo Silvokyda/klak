@@ -77,10 +77,26 @@ export const initialTools: ToolDefinition[] = [
   {
     name: "browser_automation",
     label: "Browser Automation",
-    description: "Future controlled browser workflows.",
+    description: "Controlled browser workflows inside an explicit operator task.",
     riskLevel: "high",
-    enabled: false,
-    future: true
+    enabled: true,
+    future: false
+  },
+  {
+    name: "window_observer",
+    label: "Window Control",
+    description: "Observe windows and focus a known window inside an explicit operator task.",
+    riskLevel: "high",
+    enabled: true,
+    future: false
+  },
+  {
+    name: "filesystem_operator",
+    label: "Filesystem Operator",
+    description: "Scoped filesystem operations inside an explicit operator task.",
+    riskLevel: "high",
+    enabled: true,
+    future: false
   },
   {
     name: "file_reader",

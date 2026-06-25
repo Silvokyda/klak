@@ -61,6 +61,8 @@ export async function resetLocalDatabase(): Promise<void> {
   await db.execute("DELETE FROM registered_apps");
   await db.execute("DELETE FROM command_templates");
   await db.execute("DELETE FROM background_processes");
+  await db.execute("DELETE FROM operator_task_steps");
+  await db.execute("DELETE FROM operator_task_runs");
 }
 
 async function createAdapter(): Promise<DbAdapter> {
@@ -96,6 +98,8 @@ function createInsecureDevDatabase(): DbAdapter {
     registered_apps: Row[];
     command_templates: Row[];
     background_processes: Row[];
+    operator_task_runs: Row[];
+    operator_task_steps: Row[];
     schema_migrations: Row[];
   };
 
@@ -110,6 +114,8 @@ function createInsecureDevDatabase(): DbAdapter {
     registered_apps: [],
     command_templates: [],
     background_processes: [],
+    operator_task_runs: [],
+    operator_task_steps: [],
     schema_migrations: []
   });
 
@@ -159,6 +165,12 @@ function createInsecureDevDatabase(): DbAdapter {
       }
       else if (normalized.startsWith("UPDATE WORKFLOWS")) updateById(state.workflows, String(bindValues[10]), workflowPatch(bindValues));
       else if (normalized.startsWith("DELETE FROM WORKFLOWS")) removeById(state.workflows, String(bindValues[0]));
+      else if (normalized.startsWith("INSERT INTO OPERATOR_TASK_RUNS")) upsert(state.operator_task_runs, operatorTaskRunRow(bindValues));
+      else if (normalized.startsWith("UPDATE OPERATOR_TASK_RUNS")) updateById(state.operator_task_runs, String(bindValues[13]), operatorTaskRunPatch(bindValues));
+      else if (normalized.startsWith("DELETE FROM OPERATOR_TASK_RUNS")) removeById(state.operator_task_runs, String(bindValues[0]));
+      else if (normalized.startsWith("INSERT INTO OPERATOR_TASK_STEPS")) upsert(state.operator_task_steps, operatorTaskStepRow(bindValues));
+      else if (normalized.startsWith("UPDATE OPERATOR_TASK_STEPS")) updateById(state.operator_task_steps, String(bindValues[18]), operatorTaskStepPatch(bindValues));
+      else if (normalized.startsWith("DELETE FROM OPERATOR_TASK_STEPS")) removeById(state.operator_task_steps, String(bindValues[0]));
       else if (normalized.startsWith("DELETE FROM")) {
         const table = normalized.split(" ")[2].toLowerCase() as keyof State;
         if (Array.isArray(state[table])) state[table] = [];
@@ -180,6 +192,8 @@ function createInsecureDevDatabase(): DbAdapter {
       else if (normalized.includes("FROM REGISTERED_APPS")) rows = selectRegisteredApps(state.registered_apps, normalized, bindValues);
       else if (normalized.includes("FROM COMMAND_TEMPLATES")) rows = selectCommandTemplates(state.command_templates, normalized, bindValues);
       else if (normalized.includes("FROM BACKGROUND_PROCESSES")) rows = selectBackgroundProcesses(state.background_processes, normalized, bindValues);
+      else if (normalized.includes("FROM OPERATOR_TASK_RUNS")) rows = selectOperatorTaskRuns(state.operator_task_runs, normalized, bindValues);
+      else if (normalized.includes("FROM OPERATOR_TASK_STEPS")) rows = selectOperatorTaskSteps(state.operator_task_steps, normalized, bindValues);
       return rows as T[];
     }
   };
@@ -287,6 +301,26 @@ function workflowPatch(values: BindValue[]): Row {
   return { project_id, name, description, trigger_phrase, steps_json, risk_level, requires_confirmation, updated_at, last_run_at, run_count };
 }
 
+function operatorTaskRunRow(values: BindValue[]): Row {
+  const [id, goal, mode, status, scope_json, plan_json, current_step_id, approvals_json, verification_state_json, retries_json, final_report, failure_class, started_at, completed_at, created_at, updated_at] = values;
+  return { id, goal, mode, status, scope_json, plan_json, current_step_id, approvals_json, verification_state_json, retries_json, final_report, failure_class, started_at, completed_at, created_at, updated_at };
+}
+
+function operatorTaskRunPatch(values: BindValue[]): Row {
+  const [goal, mode, status, scope_json, plan_json, current_step_id, approvals_json, verification_state_json, retries_json, final_report, failure_class, started_at, completed_at, updated_at] = values;
+  return { goal, mode, status, scope_json, plan_json, current_step_id, approvals_json, verification_state_json, retries_json, final_report, failure_class, started_at, completed_at, updated_at };
+}
+
+function operatorTaskStepRow(values: BindValue[]): Row {
+  const [id, task_run_id, order_index, title, kind, intent, execution_method, fallback_methods_json, inputs_json, verification_json, approval_required, status, retry_count, max_retries, verification_status, checkpoint_json, result_summary, failure_class, action_log_ids_json, started_at, completed_at, created_at, updated_at] = values;
+  return { id, task_run_id, order_index, title, kind, intent, execution_method, fallback_methods_json, inputs_json, verification_json, approval_required, status, retry_count, max_retries, verification_status, checkpoint_json, result_summary, failure_class, action_log_ids_json, started_at, completed_at, created_at, updated_at };
+}
+
+function operatorTaskStepPatch(values: BindValue[]): Row {
+  const [order_index, title, kind, intent, execution_method, fallback_methods_json, inputs_json, verification_json, approval_required, status, retry_count, max_retries, verification_status, checkpoint_json, result_summary, failure_class, action_log_ids_json, started_at, completed_at, updated_at] = values;
+  return { order_index, title, kind, intent, execution_method, fallback_methods_json, inputs_json, verification_json, approval_required, status, retry_count, max_retries, verification_status, checkpoint_json, result_summary, failure_class, action_log_ids_json, started_at, completed_at, updated_at };
+}
+
 function selectMemories(rows: Row[], sql: string, values: BindValue[]): Row[] {
   let result = rows.filter((row) => !row.expires_at || Date.parse(String(row.expires_at)) > Date.now());
   if (sql.includes("WHERE ID =")) result = result.filter((row) => row.id === values[0]);
@@ -363,6 +397,20 @@ function selectBackgroundProcesses(rows: Row[], sql: string, values: BindValue[]
   else if (sql.includes("PROJECT_ID =")) result = result.filter((row) => row.project_id === values[0]);
   else if (sql.includes("STATUS IN")) result = result.filter((row) => ["starting", "running"].includes(String(row.status)));
   return result.sort((a, b) => Date.parse(String(b.updated_at)) - Date.parse(String(a.updated_at)));
+}
+
+function selectOperatorTaskRuns(rows: Row[], sql: string, values: BindValue[]): Row[] {
+  let result = [...rows];
+  if (sql.includes("WHERE ID =")) result = result.filter((row) => row.id === values[0]);
+  else if (sql.includes("STATUS =")) result = result.filter((row) => row.status === values[0]);
+  return result.sort((a, b) => Date.parse(String(b.updated_at)) - Date.parse(String(a.updated_at)));
+}
+
+function selectOperatorTaskSteps(rows: Row[], sql: string, values: BindValue[]): Row[] {
+  let result = [...rows];
+  if (sql.includes("WHERE ID =")) result = result.filter((row) => row.id === values[0]);
+  else if (sql.includes("TASK_RUN_ID =")) result = result.filter((row) => row.task_run_id === values[0]);
+  return result.sort((a, b) => Number(a.order_index) - Number(b.order_index));
 }
 
 function sortCreatedDesc(a: Row, b: Row) {
