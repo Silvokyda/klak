@@ -3,7 +3,6 @@ import { useEffect, useRef, useState } from "react";
 import type { AppSettings } from "../types";
 import { getTranscriptionProvider } from "../lib/voice/transcription";
 import { createActionLog } from "../lib/logs/actionLogRepository";
-import { apiKeyVault } from "../lib/security/apiKeyVault";
 
 interface Props {
   settings: AppSettings;
@@ -13,20 +12,12 @@ interface Props {
   autoStopAfterMs?: number;
 }
 
-interface RealtimeTranscriptionState {
-  ws: WebSocket;
-  text: string;
-  finalized: boolean;
-  resolveFinal?: (text: string) => void;
-}
-
 export function VoiceRecorder({ settings, onTranscript, onStatus, autoStartSignal = 0, autoStopAfterMs }: Props) {
   const streamRef = useRef<MediaStream | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
   const audioSourceRef = useRef<MediaStreamAudioSourceNode | null>(null);
   const audioProcessorRef = useRef<ScriptProcessorNode | null>(null);
   const pcmChunksRef = useRef<Float32Array[]>([]);
-  const realtimeRef = useRef<RealtimeTranscriptionState | null>(null);
   const sampleRateRef = useRef(44100);
   const recordingRef = useRef(false);
   const [recording, setRecording] = useState(false);
@@ -76,7 +67,6 @@ export function VoiceRecorder({ settings, onTranscript, onStatus, autoStartSigna
       return;
     }
     try {
-      const realtime = settings.voiceInputProvider === "openai_transcription" ? await startRealtimeTranscription() : null;
       const stream = await navigator.mediaDevices.getUserMedia({
         audio: {
           channelCount: 1,
@@ -92,14 +82,6 @@ export function VoiceRecorder({ settings, onTranscript, onStatus, autoStartSigna
         if (!recordingRef.current) return;
         const input = event.inputBuffer.getChannelData(0);
         pcmChunksRef.current.push(new Float32Array(input));
-        if (realtime?.ws.readyState === WebSocket.OPEN) {
-          realtime.ws.send(
-            JSON.stringify({
-              type: "input_audio_buffer.append",
-              audio: pcm16Base64(resampleToPcm16(input, audioContext.sampleRate, 24000))
-            })
-          );
-        }
         event.outputBuffer.getChannelData(0).fill(0);
       };
       source.connect(processor);
@@ -120,7 +102,7 @@ export function VoiceRecorder({ settings, onTranscript, onStatus, autoStartSigna
       );
       await createActionLog({
         tool_name: "voice_recording_started",
-        input_summary: realtime ? "streaming voice recording started" : "push-to-talk recording started",
+        input_summary: "push-to-talk recording started",
         risk_level: "medium",
         status: "completed",
         user_approved: true
@@ -141,31 +123,11 @@ export function VoiceRecorder({ settings, onTranscript, onStatus, autoStartSigna
     }
     await createActionLog({
       tool_name: "voice_transcription_requested",
-      input_summary: `audio bytes: ${audio.size}, mime: ${audio.type || "unknown"}, provider: ${settings.voiceInputProvider}, streaming: ${Boolean(realtimeRef.current)}`,
+      input_summary: `audio bytes: ${audio.size}, mime: ${audio.type || "unknown"}, provider: ${settings.voiceInputProvider}`,
       risk_level: "medium",
       status: "completed",
       user_approved: true
     });
-
-    if (settings.voiceInputProvider === "openai_transcription" && realtimeRef.current) {
-      report("Finishing live transcript...");
-      const transcript = await finishRealtimeTranscription();
-      if (transcript) {
-        report(`Heard: ${transcript}`);
-        await onTranscript(transcript);
-        await createActionLog({
-          tool_name: "voice_transcription_completed",
-          input_summary: `streaming transcript chars: ${transcript.length}`,
-          risk_level: "medium",
-          status: "completed",
-          user_approved: true
-        });
-        report("Voice command sent.");
-        return;
-      }
-      report("Live transcript was empty. Trying fallback transcription...");
-    }
-
     report(settings.voiceInputProvider === "local_whisper_cli" ? "Running local Whisper..." : "Transcribing...");
     const result = await getTranscriptionProvider(settings).transcribe({ audio, settings });
     if (result.text) {
@@ -196,8 +158,6 @@ export function VoiceRecorder({ settings, onTranscript, onStatus, autoStartSigna
     recordingRef.current = false;
     setRecording(false);
     void finishWavCapture();
-    realtimeRef.current?.ws.close();
-    realtimeRef.current = null;
     void createActionLog({
       tool_name: "voice_recording_cancelled",
       input_summary: "push-to-talk recording cancelled",
@@ -227,104 +187,6 @@ export function VoiceRecorder({ settings, onTranscript, onStatus, autoStartSigna
     streamRef.current = null;
     pcmChunksRef.current = [];
     return audio;
-  }
-
-  async function startRealtimeTranscription() {
-    const apiKey = await apiKeyVault.getApiKeyForProviderCall();
-    if (!apiKey) throw new Error("Add your OpenAI API key in Settings first.");
-
-    const realtimeUrl = `${settings.apiBaseUrl.replace(/^http/, "ws").replace(/\/$/, "")}/realtime?model=gpt-realtime-whisper`;
-    const ws = new WebSocket(realtimeUrl, [
-      "realtime",
-      `openai-insecure-api-key.${apiKey}`,
-      "openai-beta.realtime-v1"
-    ]);
-
-    const state: RealtimeTranscriptionState = { ws, text: "", finalized: false };
-    realtimeRef.current = state;
-
-    await new Promise<void>((resolve, reject) => {
-      const timeout = window.setTimeout(() => reject(new Error("Realtime transcription connection timed out.")), 8000);
-      ws.addEventListener(
-        "open",
-        () => {
-          window.clearTimeout(timeout);
-          ws.send(
-            JSON.stringify({
-              type: "session.update",
-              session: {
-                type: "transcription",
-                audio: {
-                  input: {
-                    format: { type: "audio/pcm", rate: 24000 },
-                    transcription: {
-                      model: "gpt-realtime-whisper",
-                      language: "en",
-                      delay: "low"
-                    },
-                    turn_detection: null
-                  }
-                }
-              }
-            })
-          );
-          resolve();
-        },
-        { once: true }
-      );
-      ws.addEventListener(
-        "error",
-        () => {
-          window.clearTimeout(timeout);
-          reject(new Error("Realtime transcription connection failed."));
-        },
-        { once: true }
-      );
-    });
-
-    ws.addEventListener("message", (event) => {
-      const payload = parseRealtimeEvent(event.data);
-      if (!payload) return;
-      if (payload.type === "error") {
-        const message = payload.error?.message ?? "Realtime transcription failed.";
-        report(message);
-        state.resolveFinal?.("");
-        return;
-      }
-      if (payload.type?.endsWith("transcription.delta") && typeof payload.delta === "string") {
-        state.text = `${state.text}${payload.delta}`;
-        report(`Hearing: ${state.text}`);
-      }
-      if (payload.type?.endsWith("transcription.completed")) {
-        state.finalized = true;
-        const transcript = typeof payload.transcript === "string" ? payload.transcript : state.text;
-        state.text = transcript.trim();
-        state.resolveFinal?.(state.text);
-      }
-    });
-
-    ws.addEventListener("close", () => {
-      state.resolveFinal?.(state.text.trim());
-    });
-
-    return state;
-  }
-
-  async function finishRealtimeTranscription() {
-    const realtime = realtimeRef.current;
-    if (!realtime) return "";
-    if (realtime.ws.readyState === WebSocket.OPEN) {
-      realtime.ws.send(JSON.stringify({ type: "input_audio_buffer.commit" }));
-    }
-
-    const transcript = await new Promise<string>((resolve) => {
-      realtime.resolveFinal = resolve;
-      window.setTimeout(() => resolve(realtime.text.trim()), 4500);
-    });
-
-    realtime.ws.close();
-    realtimeRef.current = null;
-    return transcript.trim();
   }
 
   if (!settings.voiceEnabled) {
@@ -366,49 +228,6 @@ export function VoiceRecorder({ settings, onTranscript, onStatus, autoStartSigna
       {message && <span>{message}</span>}
     </div>
   );
-}
-
-function parseRealtimeEvent(data: unknown): { type?: string; delta?: string; transcript?: string; error?: { message?: string } } | null {
-  if (typeof data !== "string") return null;
-  try {
-    return JSON.parse(data);
-  } catch {
-    return null;
-  }
-}
-
-function resampleToPcm16(input: Float32Array, sourceRate: number, targetRate: number) {
-  if (sourceRate === targetRate) return floatToPcm16(input);
-  const ratio = sourceRate / targetRate;
-  const outputLength = Math.max(1, Math.floor(input.length / ratio));
-  const output = new Float32Array(outputLength);
-  for (let index = 0; index < outputLength; index += 1) {
-    const sourceIndex = index * ratio;
-    const left = Math.floor(sourceIndex);
-    const right = Math.min(input.length - 1, left + 1);
-    const weight = sourceIndex - left;
-    output[index] = input[left] * (1 - weight) + input[right] * weight;
-  }
-  return floatToPcm16(output);
-}
-
-function floatToPcm16(input: Float32Array) {
-  const pcm = new Int16Array(input.length);
-  for (let index = 0; index < input.length; index += 1) {
-    const sample = Math.max(-1, Math.min(1, input[index]));
-    pcm[index] = sample < 0 ? sample * 0x8000 : sample * 0x7fff;
-  }
-  return pcm;
-}
-
-function pcm16Base64(pcm: Int16Array) {
-  const bytes = new Uint8Array(pcm.buffer);
-  let binary = "";
-  const chunkSize = 0x8000;
-  for (let index = 0; index < bytes.length; index += chunkSize) {
-    binary += String.fromCharCode(...bytes.subarray(index, index + chunkSize));
-  }
-  return window.btoa(binary);
 }
 
 function encodeWav(chunks: Float32Array[], sampleRate: number) {

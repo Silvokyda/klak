@@ -124,7 +124,10 @@ export interface AppSettings {
   allToolsDisabled: boolean;
   voiceEnabled: boolean;
   pushToTalkEnabled: boolean;
+  voiceConversationMode: "local_push_to_talk" | "openai_realtime";
   voiceInputProvider: "disabled" | "openai_transcription" | "local_whisper_cli";
+  realtimeVoiceModel: string;
+  realtimeVoiceName: string;
   voiceOutputProvider: "disabled" | "web_speech";
   voiceOutputVoiceName: string;
   voiceOutputRate: number;
@@ -139,6 +142,9 @@ export interface AppSettings {
   wakeWordModel: string;
   wakeWordCustomModelPath: string;
   wakeWordThreshold: number;
+  wakeWordDiagnosticsEnabled: boolean;
+  wakeWordDeviceName: string;
+  wakeWordDeviceIndex: number | null;
   localWhisperExecutablePath: string;
   localWhisperModelPath: string;
   localWhisperLanguage: string;

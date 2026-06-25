@@ -76,7 +76,7 @@ const BACKGROUND_OUTPUT_LIMIT: usize = 12_000;
 const BACKGROUND_LOG_FILE_LIMIT: u64 = 96_000;
 
 static BACKGROUND_CHILDREN: OnceLock<Mutex<HashMap<String, Child>>> = OnceLock::new();
-static WAKE_LISTENER_CHILD: OnceLock<Mutex<Option<Child>>> = OnceLock::new();
+static WAKE_LISTENER_REGISTRY: OnceLock<Mutex<WakeListenerRegistry>> = OnceLock::new();
 static BROWSER_SESSIONS: OnceLock<Mutex<HashMap<String, BrowserSessionState>>> = OnceLock::new();
 
 #[derive(serde::Deserialize)]
@@ -330,12 +330,84 @@ struct StartWakeListenerInput {
     model_name: String,
     custom_model_path: Option<String>,
     threshold: f32,
+    diagnostics_enabled: Option<bool>,
+    device_name: Option<String>,
+    device_index: Option<i32>,
 }
 
 #[derive(serde::Serialize)]
 struct WakeListenerStatus {
     running: bool,
+    state: String,
+    pid: Option<u32>,
     message: String,
+    selected_microphone: Option<String>,
+    latest_error: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct ListWakeAudioDevicesInput {
+    python_executable_path: String,
+}
+
+#[derive(serde::Serialize, serde::Deserialize, Clone)]
+struct WakeAudioDevice {
+    device_index: i32,
+    device_name: String,
+    max_input_channels: i32,
+    default_sample_rate: f64,
+    is_default: bool,
+    can_attempt: bool,
+}
+
+#[derive(serde::Deserialize)]
+struct WakeAudioDevicesEvent {
+    devices: Vec<WakeAudioDevice>,
+}
+
+#[derive(serde::Deserialize)]
+struct RealtimeSessionInput {
+    api_base_url: String,
+    model: String,
+    voice: Option<String>,
+    instructions: Option<String>,
+}
+
+#[derive(serde::Serialize)]
+struct RealtimeSessionOutput {
+    client_secret: String,
+    model: String,
+    expires_at: Option<i64>,
+    endpoint: String,
+}
+
+#[derive(Clone, PartialEq)]
+enum WakeListenerState {
+    Stopped,
+    Starting,
+    Running,
+    Stopping,
+    Failed,
+}
+
+struct WakeListenerRegistry {
+    state: WakeListenerState,
+    child: Option<Child>,
+    config_signature: Option<String>,
+    selected_microphone: Option<String>,
+    latest_error: Option<String>,
+}
+
+impl Default for WakeListenerRegistry {
+    fn default() -> Self {
+        Self {
+            state: WakeListenerState::Stopped,
+            child: None,
+            config_signature: None,
+            selected_microphone: None,
+            latest_error: None,
+        }
+    }
 }
 
 #[derive(serde::Serialize)]
@@ -407,6 +479,92 @@ fn has_secret(key: String) -> Result<bool, String> {
 }
 
 #[tauri::command]
+fn create_realtime_session(input: RealtimeSessionInput) -> Result<RealtimeSessionOutput, String> {
+    let api_key = get_secret("ai_api_key".into())?
+        .ok_or_else(|| "Add your OpenAI API key in Settings before using realtime voice.".to_string())?;
+    let base_url = input.api_base_url.trim().trim_end_matches('/');
+    let endpoint = format!("{base_url}/realtime/client_secrets");
+    let model = if input.model.trim().is_empty() {
+        "gpt-4o-realtime-preview".to_string()
+    } else {
+        input.model.trim().to_string()
+    };
+
+    let body = serde_json::json!({
+        "session": {
+            "type": "realtime",
+            "model": model,
+            "modalities": ["audio", "text"],
+            "instructions": input.instructions.unwrap_or_else(|| "You are Klak, a concise local-first desktop assistant. Do not execute tools directly; describe proposed actions for the app to preview and approve.".into()),
+            "audio": {
+                "input": {
+                    "format": { "type": "audio/pcm", "rate": 24000 },
+                    "transcription": {
+                        "model": "gpt-realtime-whisper",
+                        "language": "en"
+                    },
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": 0.5,
+                        "prefix_padding_ms": 300,
+                        "silence_duration_ms": 650,
+                        "create_response": true,
+                        "interrupt_response": true
+                    }
+                },
+                "output": {
+                    "format": { "type": "audio/pcm", "rate": 24000 },
+                    "voice": input.voice.unwrap_or_else(|| "alloy".into())
+                }
+            }
+        }
+    });
+
+    let response = ureq::post(&endpoint)
+        .set("Authorization", &format!("Bearer {api_key}"))
+        .set("Content-Type", "application/json")
+        .send_json(body);
+
+    let value: serde_json::Value = match response {
+        Ok(response) => response
+            .into_json()
+            .map_err(|error| format!("Realtime credential response was not valid JSON: {error}"))?,
+        Err(ureq::Error::Status(status, response)) => {
+            let body = response.into_string().unwrap_or_default();
+            return Err(format!(
+                "Realtime credential request returned {status}. {}",
+                redact_provider_error(&body)
+            ));
+        }
+        Err(error) => return Err(format!("Realtime credential request failed: {error}")),
+    };
+
+    let client_secret = value
+        .pointer("/client_secret/value")
+        .or_else(|| value.pointer("/value"))
+        .and_then(|item| item.as_str())
+        .ok_or_else(|| "Realtime credential response did not include a client secret.".to_string())?
+        .to_string();
+    let expires_at = value
+        .pointer("/client_secret/expires_at")
+        .or_else(|| value.pointer("/expires_at"))
+        .and_then(|item| item.as_i64());
+    let returned_model = value
+        .pointer("/session/model")
+        .or_else(|| value.pointer("/model"))
+        .and_then(|item| item.as_str())
+        .unwrap_or(&model)
+        .to_string();
+
+    Ok(RealtimeSessionOutput {
+        client_secret,
+        model: returned_model,
+        expires_at,
+        endpoint: endpoint.replace("/client_secrets", "/calls"),
+    })
+}
+
+#[tauri::command]
 fn summon_klak(app: tauri::AppHandle) -> Result<(), String> {
     summon_klak_window(&app);
     Ok(())
@@ -423,26 +581,48 @@ fn start_wake_listener(
     app: tauri::AppHandle,
     input: StartWakeListenerInput,
 ) -> Result<WakeListenerStatus, String> {
-    let mut child_guard = wake_listener_child()
+    let mut registry = wake_listener_registry()
         .lock()
         .map_err(|_| "Wake listener registry is unavailable.".to_string())?;
 
-    if let Some(child) = child_guard.as_mut() {
+    let signature = wake_listener_config_signature(&input);
+    let mut needs_cleanup = false;
+    let current_state = registry.state.clone();
+    let current_signature = registry.config_signature.clone();
+    if let Some(child) = registry.child.as_mut() {
         if matches!(child.try_wait(), Ok(None)) {
-            return Ok(WakeListenerStatus {
-                running: true,
-                message: "Wake listener is already running.".into(),
-            });
+            if current_state == WakeListenerState::Starting || current_state == WakeListenerState::Running {
+                let pid = child.id();
+                if current_signature.as_deref() == Some(signature.as_str()) {
+                    wake_lifecycle_log(&current_state, Some(pid), "start ignored; listener already active");
+                    return Ok(wake_listener_status_from_registry(&registry, "Wake listener is already running."));
+                }
+                wake_lifecycle_log(&WakeListenerState::Stopping, Some(pid), "settings changed; restarting listener");
+                stop_wake_listener_child(&mut registry);
+            }
+        } else {
+            needs_cleanup = true;
         }
-        *child_guard = None;
     }
+    if needs_cleanup {
+        registry.child = None;
+        registry.state = WakeListenerState::Stopped;
+        registry.config_signature = None;
+    }
+
+    registry.state = WakeListenerState::Starting;
+    registry.latest_error = None;
+    wake_lifecycle_log(&registry.state, None, "starting listener");
 
     let python = resolve_wake_listener_python(input.python_executable_path.trim());
     if python.is_empty() {
+        registry.state = WakeListenerState::Failed;
+        registry.latest_error = Some("Python executable path is required for openWakeWord.".into());
         return Err("Python executable path is required for openWakeWord.".into());
     }
 
     let script_path = resolve_wake_listener_script(&app)?;
+    let selected_device_name = input.device_name.as_deref().unwrap_or("").trim();
     let mut command = Command::new(&python);
     command
         .arg(script_path)
@@ -457,6 +637,18 @@ fn start_wake_listener(
         .stdout(Stdio::piped())
         .stderr(Stdio::piped());
 
+    if input.diagnostics_enabled.unwrap_or(false) {
+        command.arg("--diagnostics");
+    }
+    if !selected_device_name.is_empty() {
+        command.arg("--device-name").arg(selected_device_name);
+    }
+    if let Some(device_index) = input.device_index {
+        if device_index >= 0 {
+            command.arg("--device-index").arg(device_index.to_string());
+        }
+    }
+
     if let Some(custom_model_path) = input.custom_model_path.as_deref() {
         if !custom_model_path.trim().is_empty() {
             command.arg("--custom-model-path").arg(custom_model_path.trim());
@@ -465,7 +657,12 @@ fn start_wake_listener(
 
     let mut child = command
         .spawn()
-        .map_err(|error| format!("Unable to start openWakeWord sidecar: {error}"))?;
+        .map_err(|error| {
+            registry.state = WakeListenerState::Failed;
+            registry.latest_error = Some(format!("Unable to start openWakeWord sidecar: {error}"));
+            format!("Unable to start openWakeWord sidecar: {error}")
+        })?;
+    let pid = child.id();
 
     if let Some(stdout) = child.stdout.take() {
         pipe_wake_listener_stdout(app.clone(), stdout);
@@ -474,26 +671,84 @@ fn start_wake_listener(
         pipe_wake_listener_stderr(stderr);
     }
 
-    *child_guard = Some(child);
-    Ok(WakeListenerStatus {
-        running: true,
-        message: "Wake listener started.".into(),
-    })
+    registry.state = WakeListenerState::Running;
+    registry.config_signature = Some(signature);
+    registry.selected_microphone = if selected_device_name.is_empty() {
+        None
+    } else {
+        Some(selected_device_name.to_string())
+    };
+    registry.child = Some(child);
+    wake_lifecycle_log(&registry.state, Some(pid), "listener started");
+    Ok(wake_listener_status_from_registry(&registry, "Wake listener started."))
 }
 
 #[tauri::command]
 fn stop_wake_listener() -> Result<(), String> {
-    let mut child_guard = wake_listener_child()
+    let mut registry = wake_listener_registry()
         .lock()
         .map_err(|_| "Wake listener registry is unavailable.".to_string())?;
-    if let Some(child) = child_guard.as_mut() {
-        if matches!(child.try_wait(), Ok(None)) {
-            let _ = child.kill();
-            let _ = child.wait();
+    stop_wake_listener_child(&mut registry);
+    Ok(())
+}
+
+#[tauri::command]
+fn get_wake_listener_status() -> Result<WakeListenerStatus, String> {
+    let mut registry = wake_listener_registry()
+        .lock()
+        .map_err(|_| "Wake listener registry is unavailable.".to_string())?;
+    if let Some(child) = registry.child.as_mut() {
+        if matches!(child.try_wait(), Ok(Some(_)) | Err(_)) {
+            registry.child = None;
+            registry.state = WakeListenerState::Stopped;
+            registry.config_signature = None;
         }
     }
-    *child_guard = None;
-    Ok(())
+    Ok(wake_listener_status_from_registry(&registry, "Wake listener status."))
+}
+
+#[tauri::command]
+fn list_wake_audio_devices(
+    app: tauri::AppHandle,
+    input: ListWakeAudioDevicesInput,
+) -> Result<Vec<WakeAudioDevice>, String> {
+    let python = resolve_wake_listener_python(input.python_executable_path.trim());
+    if python.is_empty() {
+        return Err("Python executable path is required to list microphones.".into());
+    }
+    let script_path = resolve_wake_listener_script(&app)?;
+    let output = Command::new(&python)
+        .arg(script_path)
+        .arg("--list-devices-json")
+        .stdout(Stdio::piped())
+        .stderr(Stdio::piped())
+        .output()
+        .map_err(|error| format!("Unable to list wake-word microphones: {error}"))?;
+
+    if !output.status.success() {
+        let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
+        return Err(if stderr.is_empty() {
+            "Wake-word microphone listing failed without a detailed error.".into()
+        } else {
+            format!("Wake-word microphone listing failed: {}", truncate_for_ui(&stderr))
+        });
+    }
+
+    let stdout = String::from_utf8_lossy(&output.stdout);
+    for line in stdout.lines() {
+        if line.trim().is_empty() {
+            continue;
+        }
+        let value: serde_json::Value = serde_json::from_str(line)
+            .map_err(|error| format!("Unable to parse microphone list: {error}"))?;
+        if value.get("event").and_then(|event| event.as_str()) == Some("audio_devices") {
+            let event: WakeAudioDevicesEvent =
+                serde_json::from_value(value).map_err(|error| error.to_string())?;
+            return Ok(event.devices);
+        }
+    }
+
+    Err("Wake-word microphone listing did not return any devices.".into())
 }
 
 #[tauri::command]
@@ -900,8 +1155,71 @@ fn background_children() -> &'static Mutex<HashMap<String, Child>> {
     BACKGROUND_CHILDREN.get_or_init(|| Mutex::new(HashMap::new()))
 }
 
-fn wake_listener_child() -> &'static Mutex<Option<Child>> {
-    WAKE_LISTENER_CHILD.get_or_init(|| Mutex::new(None))
+fn wake_listener_registry() -> &'static Mutex<WakeListenerRegistry> {
+    WAKE_LISTENER_REGISTRY.get_or_init(|| Mutex::new(WakeListenerRegistry::default()))
+}
+
+fn wake_listener_state_label(state: &WakeListenerState) -> &'static str {
+    match state {
+        WakeListenerState::Stopped => "stopped",
+        WakeListenerState::Starting => "starting",
+        WakeListenerState::Running => "running",
+        WakeListenerState::Stopping => "stopping",
+        WakeListenerState::Failed => "failed",
+    }
+}
+
+fn wake_lifecycle_log(state: &WakeListenerState, pid: Option<u32>, message: &str) {
+    eprintln!(
+        "wake-listener lifecycle: state={} pid={} {message}",
+        wake_listener_state_label(state),
+        pid.map(|value| value.to_string()).unwrap_or_else(|| "none".into())
+    );
+}
+
+fn wake_listener_status_from_registry(
+    registry: &WakeListenerRegistry,
+    message: &str,
+) -> WakeListenerStatus {
+    let pid = registry.child.as_ref().map(|child| child.id());
+    WakeListenerStatus {
+        running: registry.state == WakeListenerState::Running && pid.is_some(),
+        state: wake_listener_state_label(&registry.state).into(),
+        pid,
+        message: message.into(),
+        selected_microphone: registry.selected_microphone.clone(),
+        latest_error: registry.latest_error.clone(),
+    }
+}
+
+fn stop_wake_listener_child(registry: &mut WakeListenerRegistry) {
+    registry.state = WakeListenerState::Stopping;
+    if let Some(child) = registry.child.as_mut() {
+        let pid = child.id();
+        wake_lifecycle_log(&registry.state, Some(pid), "stopping owned listener");
+        if matches!(child.try_wait(), Ok(None)) {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
+    registry.child = None;
+    registry.state = WakeListenerState::Stopped;
+    registry.config_signature = None;
+    registry.selected_microphone = None;
+    wake_lifecycle_log(&registry.state, None, "listener stopped");
+}
+
+fn wake_listener_config_signature(input: &StartWakeListenerInput) -> String {
+    serde_json::json!({
+        "python": input.python_executable_path.trim(),
+        "model": if input.model_name.trim().is_empty() { "hey_jarvis" } else { input.model_name.trim() },
+        "custom_model": input.custom_model_path.as_deref().unwrap_or("").trim(),
+        "threshold": input.threshold.clamp(0.2, 0.95),
+        "diagnostics": input.diagnostics_enabled.unwrap_or(false),
+        "device_name": input.device_name.as_deref().unwrap_or("").trim(),
+        "device_index": input.device_index,
+    })
+    .to_string()
 }
 
 fn validate_launchable_app_path(path: &str) -> Result<PathBuf, String> {
@@ -2279,6 +2597,17 @@ fn truncate_for_ui(value: &str) -> String {
     }
 }
 
+fn redact_provider_error(value: &str) -> String {
+    if value.trim().is_empty() {
+        return "Provider returned an empty error body.".into();
+    }
+    truncate_for_ui(value)
+        .replace("Authorization", "authorization")
+        .replace("Bearer", "bearer")
+        .replace("api_key", "api key")
+        .replace("client_secret", "client secret")
+}
+
 fn browser_sessions() -> &'static Mutex<HashMap<String, BrowserSessionState>> {
     BROWSER_SESSIONS.get_or_init(|| Mutex::new(HashMap::new()))
 }
@@ -2461,17 +2790,7 @@ fn pipe_wake_listener_stdout<R: Read + Send + 'static>(app: tauri::AppHandle, re
     thread::spawn(move || {
         let buffered = BufReader::new(reader);
         for line in buffered.lines().map_while(Result::ok) {
-            if line.contains("\"event\":\"wake\"") || line.contains("\"event\": \"wake\"") {
-                eprintln!("wake-listener: wake detected {line}");
-                let _ = app.emit_to("main", "klak-wake-detected", line.clone());
-                start_voice_session(&app);
-            } else if line.contains("\"event\":\"ready\"") || line.contains("\"event\": \"ready\"") {
-                eprintln!("wake-listener: ready {line}");
-                let _ = app.emit_to("main", "klak-wake-listener-status", line.clone());
-            } else if line.contains("\"event\":\"error\"") || line.contains("\"event\": \"error\"") {
-                eprintln!("wake-listener: error {line}");
-                let _ = app.emit_to("main", "klak-wake-listener-error", line.clone());
-            }
+            handle_wake_listener_event(&app, &line);
         }
     });
 }
@@ -2483,6 +2802,83 @@ fn pipe_wake_listener_stderr<R: Read + Send + 'static>(reader: R) {
             eprintln!("wake-listener: {line}");
         }
     });
+}
+
+fn handle_wake_listener_event(app: &tauri::AppHandle, line: &str) {
+    let parsed: serde_json::Value = match serde_json::from_str(line) {
+        Ok(value) => value,
+        Err(error) => {
+            eprintln!("wake-listener: ignored malformed json ({error})");
+            return;
+        }
+    };
+
+    let event = parsed
+        .get("event")
+        .and_then(|value| value.as_str())
+        .unwrap_or("unknown");
+
+    match event {
+        "model_check" => {
+            eprintln!("wake-listener: model check {line}");
+            let _ = app.emit_to("main", "klak-wake-diagnostics", parsed);
+        }
+        "ready" => {
+            eprintln!("wake-listener: ready {line}");
+            let _ = app.emit_to("main", "klak-wake-listener-status", parsed);
+        }
+        "audio_device" => {
+            if let Some(name) = parsed.get("device_name").and_then(|value| value.as_str()) {
+                if let Ok(mut registry) = wake_listener_registry().lock() {
+                    registry.selected_microphone = Some(name.to_string());
+                }
+            }
+            eprintln!("wake-listener: audio device {line}");
+            let _ = app.emit_to("main", "klak-wake-diagnostics", parsed);
+        }
+        "audio_level" | "wake_score" => {
+            let _ = app.emit_to("main", "klak-wake-diagnostics", parsed);
+        }
+        "wake" => {
+            let score = parsed
+                .get("score")
+                .and_then(|value| value.as_f64())
+                .unwrap_or_default();
+            eprintln!("wake-listener: wake detected score={score:.4}");
+            let _ = app.emit_to("main", "klak-wake-detected", parsed.clone());
+            show_voice_caption(app, "Wake word detected - opening voice session");
+            start_voice_session(app);
+        }
+        "warning" => {
+            eprintln!("wake-listener: warning {line}");
+            let _ = app.emit_to("main", "klak-wake-diagnostics", parsed);
+        }
+        "error" => {
+            let message = parsed
+                .get("message")
+                .and_then(|value| value.as_str())
+                .unwrap_or("Wake listener error.")
+                .to_string();
+            if let Ok(mut registry) = wake_listener_registry().lock() {
+                registry.state = WakeListenerState::Failed;
+                registry.latest_error = Some(message.clone());
+            }
+            eprintln!("wake-listener: error {line}");
+            let _ = app.emit_to("main", "klak-wake-listener-error", parsed);
+        }
+        "stopped" => {
+            if let Ok(mut registry) = wake_listener_registry().lock() {
+                registry.state = WakeListenerState::Stopped;
+                registry.child = None;
+                registry.config_signature = None;
+            }
+            eprintln!("wake-listener: stopped {line}");
+            let _ = app.emit_to("main", "klak-wake-diagnostics", parsed);
+        }
+        other => {
+            eprintln!("wake-listener: ignored event {other}");
+        }
+    }
 }
 
 fn summon_klak_window(app: &tauri::AppHandle) {
@@ -2497,6 +2893,11 @@ fn summon_klak_window(app: &tauri::AppHandle) {
 
 fn start_voice_session(app: &tauri::AppHandle) {
     pulse_glow(app);
+    if let Some(window) = app.get_webview_window("main") {
+        let _ = window.show();
+        let _ = window.unminimize();
+        let _ = window.set_focus();
+    }
     show_voice_caption(app, "I'm listening...");
     let _ = app.emit_to("main", "klak-summoned", ());
 }
@@ -2628,6 +3029,7 @@ pub fn run() {
             get_secret,
             delete_secret,
             has_secret,
+            create_realtime_session,
             create_markdown_note,
             copy_text_to_clipboard,
             launch_registered_app,
@@ -2659,7 +3061,9 @@ pub fn run() {
             summon_klak,
             update_voice_caption,
             start_wake_listener,
-            stop_wake_listener
+            stop_wake_listener,
+            get_wake_listener_status,
+            list_wake_audio_devices
         ])
         .on_window_event(|window, event| {
             if window.label() == "main" {
@@ -2691,7 +3095,12 @@ pub fn run() {
                             let _ = window.set_focus();
                         }
                     }
-                    "quit" => app.exit(0),
+                    "quit" => {
+                        if let Ok(mut registry) = wake_listener_registry().lock() {
+                            stop_wake_listener_child(&mut registry);
+                        }
+                        app.exit(0);
+                    }
                     _ => {}
                 })
                 .on_tray_icon_event(|tray, event| {
@@ -2708,6 +3117,13 @@ pub fn run() {
 
             Ok(())
         })
-        .run(tauri::generate_context!())
-        .expect("error while running Klak");
+        .build(tauri::generate_context!())
+        .expect("error while building Klak")
+        .run(|_app_handle, event| {
+            if let tauri::RunEvent::ExitRequested { .. } = event {
+                if let Ok(mut registry) = wake_listener_registry().lock() {
+                    stop_wake_listener_child(&mut registry);
+                }
+            }
+        });
 }

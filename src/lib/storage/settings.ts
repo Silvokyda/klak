@@ -18,7 +18,10 @@ export type SettingKey =
   | "current_theme"
   | "voice_enabled"
   | "push_to_talk_enabled"
+  | "voice_conversation_mode"
   | "voice_input_provider"
+  | "realtime_voice_model"
+  | "realtime_voice_name"
   | "voice_output_provider"
   | "voice_output_voice_name"
   | "voice_output_rate"
@@ -33,6 +36,9 @@ export type SettingKey =
   | "wake_word_model"
   | "wake_word_custom_model_path"
   | "wake_word_threshold"
+  | "wake_word_diagnostics_enabled"
+  | "wake_word_device_name"
+  | "wake_word_device_index"
   | "local_whisper_executable_path"
   | "local_whisper_model_path"
   | "local_whisper_language"
@@ -53,7 +59,10 @@ export const defaultSettings: AppSettings = {
   allToolsDisabled: false,
   voiceEnabled: false,
   pushToTalkEnabled: true,
+  voiceConversationMode: "local_push_to_talk",
   voiceInputProvider: "openai_transcription",
+  realtimeVoiceModel: "gpt-4o-realtime-preview",
+  realtimeVoiceName: "alloy",
   voiceOutputProvider: "disabled",
   voiceOutputVoiceName: "",
   voiceOutputRate: 1,
@@ -68,6 +77,9 @@ export const defaultSettings: AppSettings = {
   wakeWordModel: "hey_jarvis",
   wakeWordCustomModelPath: "",
   wakeWordThreshold: 0.55,
+  wakeWordDiagnosticsEnabled: false,
+  wakeWordDeviceName: "",
+  wakeWordDeviceIndex: null,
   localWhisperExecutablePath: "",
   localWhisperModelPath: "",
   localWhisperLanguage: "auto",
@@ -123,7 +135,12 @@ export async function loadSettings(): Promise<AppSettings> {
     allToolsDisabled: rows.all_tools_disabled === "true",
     voiceEnabled: rows.voice_enabled === "true",
     pushToTalkEnabled: rows.push_to_talk_enabled !== "false",
+    voiceConversationMode:
+      (rows.voice_conversation_mode as AppSettings["voiceConversationMode"]) ||
+      defaultSettings.voiceConversationMode,
     voiceInputProvider: (rows.voice_input_provider as AppSettings["voiceInputProvider"]) || defaultSettings.voiceInputProvider,
+    realtimeVoiceModel: rows.realtime_voice_model || defaultSettings.realtimeVoiceModel,
+    realtimeVoiceName: rows.realtime_voice_name || defaultSettings.realtimeVoiceName,
     voiceOutputProvider: (rows.voice_output_provider as AppSettings["voiceOutputProvider"]) || defaultSettings.voiceOutputProvider,
     voiceOutputVoiceName: rows.voice_output_voice_name || defaultSettings.voiceOutputVoiceName,
     voiceOutputRate: Number(rows.voice_output_rate || defaultSettings.voiceOutputRate),
@@ -138,6 +155,12 @@ export async function loadSettings(): Promise<AppSettings> {
     wakeWordModel: rows.wake_word_model || defaultSettings.wakeWordModel,
     wakeWordCustomModelPath: rows.wake_word_custom_model_path || "",
     wakeWordThreshold: Number(rows.wake_word_threshold || defaultSettings.wakeWordThreshold),
+    wakeWordDiagnosticsEnabled: rows.wake_word_diagnostics_enabled === "true",
+    wakeWordDeviceName: rows.wake_word_device_name || "",
+    wakeWordDeviceIndex:
+      rows.wake_word_device_index && rows.wake_word_device_index !== "null"
+        ? Number(rows.wake_word_device_index)
+        : null,
     localWhisperExecutablePath: rows.local_whisper_executable_path || "",
     localWhisperModelPath: rows.local_whisper_model_path || "",
     localWhisperLanguage: rows.local_whisper_language || defaultSettings.localWhisperLanguage,
@@ -161,7 +184,10 @@ export async function saveSettings(settings: AppSettings): Promise<void> {
     setSetting("all_tools_disabled", String(settings.allToolsDisabled)),
     setSetting("voice_enabled", String(settings.voiceEnabled)),
     setSetting("push_to_talk_enabled", String(settings.pushToTalkEnabled)),
+    setSetting("voice_conversation_mode", settings.voiceConversationMode),
     setSetting("voice_input_provider", settings.voiceInputProvider),
+    setSetting("realtime_voice_model", settings.realtimeVoiceModel),
+    setSetting("realtime_voice_name", settings.realtimeVoiceName),
     setSetting("voice_output_provider", settings.voiceOutputProvider),
     setSetting("voice_output_voice_name", settings.voiceOutputVoiceName),
     setSetting("voice_output_rate", String(settings.voiceOutputRate)),
@@ -176,6 +202,9 @@ export async function saveSettings(settings: AppSettings): Promise<void> {
     setSetting("wake_word_model", settings.wakeWordModel),
     setSetting("wake_word_custom_model_path", settings.wakeWordCustomModelPath),
     setSetting("wake_word_threshold", String(settings.wakeWordThreshold)),
+    setSetting("wake_word_diagnostics_enabled", String(settings.wakeWordDiagnosticsEnabled)),
+    setSetting("wake_word_device_name", settings.wakeWordDeviceName),
+    setSetting("wake_word_device_index", String(settings.wakeWordDeviceIndex ?? "null")),
     setSetting("local_whisper_executable_path", settings.localWhisperExecutablePath),
     setSetting("local_whisper_model_path", settings.localWhisperModelPath),
     setSetting("local_whisper_language", settings.localWhisperLanguage),

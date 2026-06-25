@@ -3262,6 +3262,91 @@ textarea {
   background: #2f7d55;
 }
 
+.voice-level-meter {
+  height: 10px;
+  overflow: hidden;
+  border-radius: 999px;
+  background: #e2e8f0;
+}
+
+.voice-level-meter span {
+  display: block;
+  height: 100%;
+  min-width: 2px;
+  border-radius: inherit;
+  background: #2f7d55;
+  transition: width 160ms ease;
+}
+
+.realtime-voice-panel {
+  margin-top: 12px;
+  border: 1px solid #d7e0ea;
+  background: #ffffff;
+  border-radius: 14px;
+  padding: 12px;
+  display: grid;
+  gap: 12px;
+}
+
+.realtime-voice-header,
+.realtime-voice-body,
+.realtime-transcript-line {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.realtime-voice-header div,
+.realtime-voice-copy,
+.realtime-transcripts {
+  display: grid;
+  gap: 4px;
+}
+
+.realtime-voice-header span,
+.realtime-voice-copy span,
+.realtime-voice-copy p,
+.realtime-transcript-line span {
+  margin: 0;
+  color: #5f6f80;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.realtime-voice-copy {
+  min-width: 0;
+  flex: 1;
+}
+
+.realtime-voice-copy strong,
+.realtime-transcript-line strong {
+  color: #1b2430;
+}
+
+.realtime-transcript-line strong {
+  max-width: 70%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  text-align: right;
+}
+
+.realtime-orb {
+  width: 42px;
+  height: 42px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  color: #124537;
+  background: #dff8ec;
+}
+
+.realtime-state-user_speaking .realtime-orb,
+.realtime-state-assistant_speaking .realtime-orb {
+  animation: voice-caption-pulse 900ms ease-in-out infinite;
+}
+
 .settings-toggle-row {
   background: #f8fafb;
   border: 1px solid #e2e8f0;

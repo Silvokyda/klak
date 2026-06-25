@@ -22,6 +22,40 @@ Use this checklist before major milestones. Keep tests local and visible.
 - Restart Klak and confirm stale activities from a previous session are marked as stale/unmanaged.
 - Confirm stale activities cannot be stopped by Klak.
 
+## Wake Word Diagnostics
+
+- Start Klak with wake word enabled and confirm exactly one Rust-owned wake listener parent process is created.
+- Restart or save wake-word settings repeatedly and confirm no duplicate Rust-owned wake listener parents are created.
+- Open Settings and confirm the configured wake-word microphone is shown correctly.
+- Enable wake diagnostics, click Start test, and confirm the listener state, PID, selected microphone, audio level, current score, highest score, threshold, last detected time, and latest error are visible.
+- Speak normally and confirm the audio meter moves clearly above idle.
+- Say unrelated words and confirm audio level may change but Klak does not activate.
+- Say "Hey Jarvis" naturally several times and confirm the highest observed wake score updates.
+- Confirm a threshold crossing produces a Python `wake` JSON event with model, score, and threshold metadata.
+- Confirm Rust logs receipt of the wake event score.
+- Confirm React shows visible "Wake word detected - opening voice session" feedback.
+- Confirm the main Klak window opens, restores, or focuses where Windows permits.
+- Disable wake word and confirm the owned listener stops.
+- Close or quit Klak and confirm the owned listener stops.
+- Confirm no raw microphone audio is persisted by diagnostics.
+
+## Realtime Voice Conversation
+
+- Select OpenAI realtime conversation in Settings and confirm local push-to-talk remains available when switching back.
+- Say the wake phrase and confirm exactly one realtime session starts.
+- Confirm overlapping `klak-wake-detected` and `klak-summoned` events do not create duplicate sessions.
+- Confirm realtime mode does not use the fixed nine-second push-to-talk timeout.
+- Confirm speech start and stop are detected automatically.
+- Confirm partial user transcript updates are visible while speaking.
+- Confirm finalized transcript creates one chat turn, not repeated partial messages.
+- Confirm assistant audio begins before the full answer finishes.
+- Speak while the assistant is speaking and confirm playback stops or mutes immediately.
+- Click Stop speaking and confirm a cancellation event is sent where supported.
+- Click End conversation and confirm microphone tracks, data channel, peer connection, and assistant audio are closed.
+- Confirm wake listening resumes only after realtime cleanup completes.
+- Confirm API keys, temporary credentials, raw microphone audio, raw assistant audio, and transcript text do not appear in logs.
+- Confirm local push-to-talk transcription still works after returning to local push-to-talk mode.
+
 ## General-User App Discovery
 
 - Open Apps.

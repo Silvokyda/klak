@@ -2,14 +2,17 @@ import type { ReactNode } from "react";
 import {
   KeyRound,
   Mic,
+  PlayCircle,
   RotateCcw,
   Save,
   ShieldCheck,
   SlidersHorizontal,
   Stethoscope,
+  Square,
   UserRoundCheck,
   Trash2
 } from "lucide-react";
+import { listen } from "@tauri-apps/api/event";
 import { useEffect, useMemo, useRef, useState } from "react";
 import { ScreenHeader } from "../../components/ScreenHeader";
 import type { AppSettings, PermissionMode } from "../../types";
@@ -18,6 +21,14 @@ import { getSecretStorageStatus } from "../../lib/security/secretStore";
 import { clearLocalData } from "../../lib/storage/settings";
 import { testWhisperSetup } from "../../lib/voice/transcription";
 import { createVoiceProfile, voiceProfileSummary } from "../../lib/voice/voiceProfile";
+import {
+  getWakeListenerStatus,
+  listWakeAudioDevices,
+  stopWakeListener,
+  syncWakeListener,
+  type WakeAudioDevice,
+  type WakeListenerStatus
+} from "../../lib/voice/wakeListener";
 
 const modes: PermissionMode[] = [
   "observe_only",
@@ -50,6 +61,32 @@ const permissionModeDescriptions: Record<PermissionMode, { title: string; descri
   }
 };
 
+interface WakeDiagnosticsState {
+  selectedMicrophone: string;
+  peak: number;
+  rms: number;
+  dbfs: number;
+  chunks: number;
+  currentScore: number;
+  maxScore: number;
+  threshold: number;
+  lastDetectedAt: string;
+  latestError: string;
+}
+
+const emptyWakeDiagnostics: WakeDiagnosticsState = {
+  selectedMicrophone: "",
+  peak: 0,
+  rms: 0,
+  dbfs: -120,
+  chunks: 0,
+  currentScore: 0,
+  maxScore: 0,
+  threshold: 0.55,
+  lastDetectedAt: "",
+  latestError: ""
+};
+
 export function SettingsScreen({
   settings,
   onSettingsChange
@@ -65,6 +102,10 @@ export function SettingsScreen({
   const [voiceSamples, setVoiceSamples] = useState<Blob[]>([]);
   const [voiceProfileMessage, setVoiceProfileMessage] = useState<string | null>(null);
   const [capturingVoiceSample, setCapturingVoiceSample] = useState(false);
+  const [wakeDevices, setWakeDevices] = useState<WakeAudioDevice[]>([]);
+  const [wakeStatus, setWakeStatus] = useState<WakeListenerStatus | null>(null);
+  const [wakeDiagnostics, setWakeDiagnostics] = useState<WakeDiagnosticsState>(emptyWakeDiagnostics);
+  const [wakeTestMessage, setWakeTestMessage] = useState<string | null>(null);
   const sampleRecorderRef = useRef<MediaRecorder | null>(null);
   const sampleChunksRef = useRef<Blob[]>([]);
 
@@ -83,6 +124,71 @@ export function SettingsScreen({
     loadSpeechVoices();
     window.speechSynthesis?.addEventListener("voiceschanged", loadSpeechVoices);
     return () => window.speechSynthesis?.removeEventListener("voiceschanged", loadSpeechVoices);
+  }, []);
+
+  useEffect(() => {
+    void refreshWakeStatus();
+  }, []);
+
+  useEffect(() => {
+    void refreshWakeDevices();
+  }, [draft.wakeWordPythonPath]);
+
+  useEffect(() => {
+    const diagnostics = listen<Record<string, unknown>>("klak-wake-diagnostics", (event) => {
+      const payload = event.payload;
+      if (payload.event === "audio_device") {
+        setWakeDiagnostics((current) => ({
+          ...current,
+          selectedMicrophone: String(payload.device_name ?? ""),
+          latestError: payload.fallback ? "Configured microphone was unavailable; using system default." : current.latestError
+        }));
+      }
+      if (payload.event === "audio_level") {
+        setWakeDiagnostics((current) => ({
+          ...current,
+          peak: Number(payload.peak ?? 0),
+          rms: Number(payload.rms ?? 0),
+          dbfs: Number(payload.dbfs ?? -120),
+          chunks: Number(payload.chunks ?? 0)
+        }));
+      }
+      if (payload.event === "wake_score") {
+        const currentScore = Number(payload.current_score ?? 0);
+        const intervalMax = Number(payload.maximum_score_since_last_event ?? 0);
+        setWakeDiagnostics((current) => ({
+          ...current,
+          currentScore,
+          maxScore: Math.max(current.maxScore, currentScore, intervalMax),
+          threshold: Number(payload.threshold ?? current.threshold)
+        }));
+      }
+      if (payload.event === "warning") {
+        setWakeDiagnostics((current) => ({ ...current, latestError: String(payload.message ?? "") }));
+      }
+    });
+    const detected = listen<{ score?: number; threshold?: number }>("klak-wake-detected", (event) => {
+      const score = typeof event.payload.score === "number" ? event.payload.score : 0;
+      setWakeDiagnostics((current) => ({
+        ...current,
+        currentScore: score,
+        maxScore: Math.max(current.maxScore, score),
+        threshold: typeof event.payload.threshold === "number" ? event.payload.threshold : current.threshold,
+        lastDetectedAt: new Date().toLocaleTimeString()
+      }));
+      setWakeTestMessage("Wake word detected - opening voice session.");
+    });
+    const errors = listen<{ message?: string }>("klak-wake-listener-error", (event) => {
+      const latestError = event.payload.message ?? "Wake listener error.";
+      setWakeDiagnostics((current) => ({ ...current, latestError }));
+      setWakeTestMessage(latestError);
+    });
+
+    return () => {
+      diagnostics.then((dispose) => dispose());
+      detected.then((dispose) => dispose());
+      errors.then((dispose) => dispose());
+    };
   }, []);
 
   async function save() {
@@ -128,6 +234,47 @@ export function SettingsScreen({
     } catch (error) {
       setWhisperStatus(error instanceof Error ? error.message : String(error));
     }
+  }
+
+  async function refreshWakeDevices() {
+    try {
+      setWakeDevices(await listWakeAudioDevices(draft));
+    } catch (error) {
+      setWakeTestMessage(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function refreshWakeStatus() {
+    try {
+      setWakeStatus(await getWakeListenerStatus());
+    } catch (error) {
+      setWakeTestMessage(error instanceof Error ? error.message : String(error));
+    }
+  }
+
+  async function startWakeTest() {
+    setWakeTestMessage("Say 'Hey Jarvis' naturally several times.");
+    const nextDraft = { ...draft, wakeWordEnabled: true, wakeWordDiagnosticsEnabled: true };
+    setDraft(nextDraft);
+    setWakeStatus(await syncWakeListener(nextDraft));
+  }
+
+  async function stopWakeTest() {
+    await stopWakeListener();
+    await refreshWakeStatus();
+    setWakeTestMessage("Wake word test stopped.");
+  }
+
+  async function restartWakeListener() {
+    await stopWakeListener();
+    const nextDraft = { ...draft, wakeWordEnabled: true, wakeWordDiagnosticsEnabled: true };
+    setDraft(nextDraft);
+    setWakeStatus(await syncWakeListener(nextDraft));
+    setWakeTestMessage("Wake listener restarted. Say 'Hey Jarvis' naturally several times.");
+  }
+
+  function resetWakeMaxScore() {
+    setWakeDiagnostics((current) => ({ ...current, maxScore: 0, currentScore: 0, lastDetectedAt: "" }));
   }
 
   async function captureVoiceSample() {
@@ -509,7 +656,112 @@ export function SettingsScreen({
                   }
                 />
               </label>
+
+              <ToggleRow
+                checked={draft.wakeWordDiagnosticsEnabled}
+                title="Enable wake diagnostics"
+                description="Shows local microphone levels and wake scores without saving audio."
+                onChange={(checked) => setDraft({ ...draft, wakeWordDiagnosticsEnabled: checked })}
+              />
+
+              <label className="field-stack">
+                <span>Wake-word microphone</span>
+                <select
+                  value={draft.wakeWordDeviceName}
+                  onChange={(event) => {
+                    const device = wakeDevices.find((item) => item.device_name === event.target.value);
+                    setDraft({
+                      ...draft,
+                      wakeWordDeviceName: device?.device_name ?? "",
+                      wakeWordDeviceIndex: device?.device_index ?? null
+                    });
+                  }}
+                >
+                  <option value="">System default microphone</option>
+                  {wakeDevices.map((device) => (
+                    <option key={`${device.device_index}-${device.device_name}`} value={device.device_name}>
+                      {device.device_name}
+                      {device.is_default ? " (default)" : ""}
+                    </option>
+                  ))}
+                </select>
+                <small>
+                  {wakeDevices.length
+                    ? "Klak stores the device name and last known index, then falls back with a warning if it disappears."
+                    : "No microphone devices loaded yet."}
+                </small>
+              </label>
+
+              <div className="voice-profile-card">
+                <div className="preview-panel-header">
+                  <div>
+                    <strong>Wake word test</strong>
+                    <span>Say 'Hey Jarvis' naturally several times.</span>
+                  </div>
+                  <span className={wakeStatus?.running ? "status-badge" : "warning-badge"}>
+                    {wakeStatus?.state ?? "unknown"}
+                  </span>
+                </div>
+
+                <div className="health-check-list">
+                  <WakeMetric label="PID" value={wakeStatus?.pid ? String(wakeStatus.pid) : "None"} />
+                  <WakeMetric
+                    label="Microphone"
+                    value={wakeDiagnostics.selectedMicrophone || wakeStatus?.selected_microphone || draft.wakeWordDeviceName || "System default"}
+                  />
+                  <WakeMetric label="Audio peak" value={String(Math.round(wakeDiagnostics.peak))} />
+                  <WakeMetric label="Audio dBFS" value={`${wakeDiagnostics.dbfs.toFixed(1)} dB`} />
+                  <WakeMetric label="Current score" value={wakeDiagnostics.currentScore.toFixed(4)} />
+                  <WakeMetric label="Highest score" value={wakeDiagnostics.maxScore.toFixed(4)} />
+                  <WakeMetric label="Threshold" value={draft.wakeWordThreshold.toFixed(2)} />
+                  <WakeMetric label="Last detected" value={wakeDiagnostics.lastDetectedAt || "Not detected"} />
+                  <WakeMetric label="Latest error" value={wakeDiagnostics.latestError || wakeStatus?.latest_error || "None"} />
+                </div>
+
+                <div className="voice-level-meter" aria-label="Wake word audio level">
+                  <span style={{ width: `${Math.min(100, Math.max(0, (wakeDiagnostics.peak / 12000) * 100))}%` }} />
+                </div>
+
+                <div className="routine-builder-actions">
+                  <button type="button" onClick={startWakeTest}>
+                    <PlayCircle size={16} />
+                    Start test
+                  </button>
+                  <button type="button" onClick={stopWakeTest}>
+                    <Square size={16} />
+                    Stop test
+                  </button>
+                  <button type="button" onClick={resetWakeMaxScore}>
+                    Reset maximum score
+                  </button>
+                  <button type="button" onClick={restartWakeListener}>
+                    <RotateCcw size={16} />
+                    Restart listener
+                  </button>
+                </div>
+
+                {wakeTestMessage && <span className="inline-status">{wakeTestMessage}</span>}
+              </div>
             </div>
+
+            <label className="field-stack">
+              <span>Voice conversation mode</span>
+              <select
+                value={draft.voiceConversationMode}
+                onChange={(event) =>
+                  setDraft({
+                    ...draft,
+                    voiceConversationMode: event.target.value as AppSettings["voiceConversationMode"]
+                  })
+                }
+              >
+                <option value="local_push_to_talk">Local push-to-talk</option>
+                <option value="openai_realtime">OpenAI realtime conversation</option>
+              </select>
+              <small>
+                Realtime mode uses cloud speech-to-speech. Local push-to-talk keeps the existing full-turn recorder.
+              </small>
+            </label>
 
             <label className="field-stack">
               <span>Voice input provider</span>
@@ -527,6 +779,28 @@ export function SettingsScreen({
                 <option value="local_whisper_cli">Local Whisper CLI</option>
               </select>
             </label>
+
+            {draft.voiceConversationMode === "openai_realtime" && (
+              <div className="settings-two-col">
+                <label className="field-stack">
+                  <span>Realtime model</span>
+                  <input
+                    value={draft.realtimeVoiceModel}
+                    onChange={(event) => setDraft({ ...draft, realtimeVoiceModel: event.target.value })}
+                    placeholder="gpt-4o-realtime-preview"
+                  />
+                </label>
+
+                <label className="field-stack">
+                  <span>Realtime voice</span>
+                  <input
+                    value={draft.realtimeVoiceName}
+                    onChange={(event) => setDraft({ ...draft, realtimeVoiceName: event.target.value })}
+                    placeholder="alloy"
+                  />
+                </label>
+              </div>
+            )}
 
             <label className="field-stack">
               <span>OpenAI transcription model</span>
@@ -783,6 +1057,15 @@ function SettingsMetric({
       <strong>{value}</strong>
       <small>{hint}</small>
     </article>
+  );
+}
+
+function WakeMetric({ label, value }: { label: string; value: string }) {
+  return (
+    <div className="health-info-row">
+      <span>{label}</span>
+      <strong>{value}</strong>
+    </div>
   );
 }
 

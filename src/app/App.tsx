@@ -47,7 +47,10 @@ export function App() {
     settings.wakeWordPythonPath,
     settings.wakeWordModel,
     settings.wakeWordCustomModelPath,
-    settings.wakeWordThreshold
+    settings.wakeWordThreshold,
+    settings.wakeWordDiagnosticsEnabled,
+    settings.wakeWordDeviceName,
+    settings.wakeWordDeviceIndex
   ]);
 
   async function updateSettings(next: AppSettings) {
