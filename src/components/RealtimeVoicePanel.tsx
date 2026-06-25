@@ -6,6 +6,7 @@ import {
   RealtimeVoiceSession,
   type RealtimeVoiceSnapshot
 } from "../lib/voice/realtimeVoiceSession";
+import { RealtimeVoiceOperatorBridge } from "../lib/voice/RealtimeVoiceOperatorBridge";
 
 interface Props {
   settings: AppSettings;
@@ -62,7 +63,10 @@ export function RealtimeVoicePanel({ settings, onFinalTurn }: Props) {
 
       if (cancelled || !mountedRef.current || generationRef.current !== generation) return;
 
-      const nextSession = new RealtimeVoiceSession(settings, snapshotGuard, finalTurnGuard);
+      const bridge = new RealtimeVoiceOperatorBridge(settings, {
+        onPreviewChanged: () => undefined
+      });
+      const nextSession = new RealtimeVoiceSession(settings, bridge, snapshotGuard, finalTurnGuard);
       sessionRef.current = nextSession;
       if (mountedRef.current && generationRef.current === generation) {
         setSnapshot(nextSession.getSnapshot());

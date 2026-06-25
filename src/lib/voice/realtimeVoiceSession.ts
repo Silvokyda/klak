@@ -1,6 +1,11 @@
 import { invoke } from "@tauri-apps/api/core";
 import type { AppSettings } from "../../types";
 import { createActionLog } from "../logs/actionLogRepository";
+import {
+  RealtimeVoiceOperatorBridge,
+  type RealtimeVoiceOperatorUpdate
+} from "./RealtimeVoiceOperatorBridge";
+import { RealtimeTurnOwnership } from "./realtimeTurnOwnership";
 import { stopWakeListener, syncWakeListener } from "./wakeListener";
 
 export type RealtimeVoiceState =
@@ -56,11 +61,8 @@ export class RealtimeVoiceSession {
   private connectionRecoveryTimer: number | null = null;
   private starting = false;
   private lifecycleGeneration = 0;
-  private currentTurnGeneration = 0;
-  private currentUserItemId: string | null = null;
-  private currentResponseId: string | null = null;
-  private userItemGenerations = new Map<string, number>();
-  private responseGenerations = new Map<string, number>();
+  private configuredSessionGeneration: number | null = null;
+  private turnOwnership = new RealtimeTurnOwnership();
   private micAcquired = false;
   private peerConnected = false;
   private dataChannelOpen = false;
@@ -69,6 +71,7 @@ export class RealtimeVoiceSession {
 
   constructor(
     private readonly settings: AppSettings,
+    private readonly operatorBridge: RealtimeVoiceOperatorBridge,
     private readonly onUpdate: (snapshot: RealtimeVoiceSnapshot) => void,
     private readonly onFinalTurn?: (turn: { userTranscript: string; assistantTranscript: string }) => void,
     private readonly onDiagnostic?: (code: string, message: string) => void
@@ -103,8 +106,7 @@ export class RealtimeVoiceSession {
           api_base_url: this.settings.apiBaseUrl,
           model: this.settings.realtimeVoiceModel || "gpt-realtime-2",
           voice: this.settings.realtimeVoiceName || "alloy",
-          instructions:
-            "You are Klak, a concise local-first desktop assistant. Do not execute tools directly. If a user asks for an action, explain that Klak will prepare an approval preview in the app."
+          instructions: this.operatorBridge.buildSessionInstructions()
         }
       });
       this.emitDiagnostic("temporary_credential_acquired", `model: ${credential.model}`);
@@ -200,6 +202,7 @@ export class RealtimeVoiceSession {
         if (!this.isGenerationActive(generation)) return;
         this.dataChannelOpen = true;
         this.emitDiagnostic("data_channel_open", "oai-events");
+        this.maybeConfigureRealtimeSession(generation);
         this.maybeEnterListening(credential.model);
       };
       channel.onmessage = (event) => this.handleEvent(event.data, generation);
@@ -273,11 +276,12 @@ export class RealtimeVoiceSession {
     if (!this.channel || this.channel.readyState !== "open") return;
     this.pauseAssistantAudio();
 
-    if (this.currentResponseId) {
-      this.channel.send(
-        JSON.stringify({ type: "response.cancel", response: { id: this.currentResponseId } })
-      );
-      this.channel.send(JSON.stringify({ type: "output_audio_buffer.clear" }));
+    const responseId = this.turnOwnership.getCurrentResponseId();
+    if (responseId) {
+      this.turnOwnership.cancelResponse(responseId);
+      this.sendEvent({ type: "response.cancel", response: { id: responseId } });
+      this.sendEvent({ type: "output_audio_buffer.clear" });
+      this.emitDiagnostic("response_cancel_requested", `response_id=${responseId}`);
     }
 
     this.transition("interrupted");
@@ -286,6 +290,44 @@ export class RealtimeVoiceSession {
     window.setTimeout(() => {
       if (this.snapshot.state === "interrupted") this.transition("listening");
     }, 250);
+  }
+
+  async publishOperatorUpdate(update: RealtimeVoiceOperatorUpdate): Promise<void> {
+    if (!this.isGenerationActive(update.sessionGeneration)) return;
+    if (!this.channel || this.channel.readyState !== "open") return;
+
+    this.emitDiagnostic(
+      "result_returned_to_realtime",
+      `call_id=${update.callId} response_id=${update.responseId} item_id=${update.outputItemId} status=${update.status}`
+    );
+
+    this.sendEvent({
+      type: "conversation.item.create",
+      item: {
+        type: "message",
+        role: "system",
+        content: [
+          {
+            type: "input_text",
+            text: JSON.stringify({
+              kind: "voice_tool_status",
+              function_name: update.functionName,
+              status: update.status,
+              message: update.message
+            })
+          }
+        ]
+      }
+    });
+
+    this.sendEvent({
+      type: "response.create",
+      response: {
+        instructions:
+          "Respond briefly to the latest tool status update. Confirm success only for completed. Explain denied, blocked, or failed results honestly.",
+        output_modalities: ["audio"]
+      }
+    });
   }
 
   async close(reason = "ended_by_user"): Promise<void> {
@@ -321,11 +363,13 @@ export class RealtimeVoiceSession {
     const itemId = stringField(event, "item_id");
     const responseId = responseIdField(event);
     const responseObjectId = nestedStringField(event, "response", "id");
+    const resolvedResponseId = responseObjectId || responseId;
+    const outputItemId = nestedStringField(event, "item", "id") || itemId;
 
     switch (event.type) {
       case "input_audio_buffer.speech_started":
-        if (!this.beginUserTurn(itemId)) break;
-        this.emitDiagnostic("speech_started", "input_audio_buffer.speech_started");
+        if (!this.turnOwnership.beginUserTurn(itemId)) break;
+        this.emitDiagnostic("speech_started", `item_id=${itemId || "unknown"}`);
         if (this.snapshot.state === "assistant_speaking") {
           this.pauseAssistantAudio();
           this.transition("interrupted");
@@ -339,28 +383,32 @@ export class RealtimeVoiceSession {
         });
         break;
       case "input_audio_buffer.speech_stopped":
-        this.emitDiagnostic("speech_stopped", "input_audio_buffer.speech_stopped");
+        this.emitDiagnostic("speech_stopped", `item_id=${itemId || "unknown"}`);
         this.transition("processing");
         break;
       case "input_audio_buffer.committed":
         void audit("realtime_user_turn_completed", "input audio committed");
         break;
       case "conversation.item.input_audio_transcription.delta":
-        if (this.acceptsUserTranscript(itemId)) {
-          this.transition(this.snapshot.state, {
-            partialUserTranscript: `${this.snapshot.partialUserTranscript}${stringField(event, "delta")}`
-          });
+        {
+          const partial = this.turnOwnership.appendUserTranscript(itemId, stringField(event, "delta"));
+          if (partial !== null) {
+            this.transition(this.snapshot.state, { partialUserTranscript: partial });
+          }
         }
         break;
       case "conversation.item.input_audio_transcription.completed":
-        if (!this.acceptsUserTranscript(itemId)) break;
         {
-          const transcript = stringField(event, "transcript") || this.snapshot.partialUserTranscript;
+          const transcript = this.turnOwnership.finalizeUserTranscript(
+            itemId,
+            stringField(event, "transcript") || this.turnOwnership.getCurrentUserPartialTranscript()
+          );
+          if (!transcript) break;
           if (looksLikeSleepPhrase(transcript)) {
             void this.close("sleep_phrase");
             break;
           }
-          this.emitDiagnostic("user_transcript_finalized", "conversation item transcript completed");
+          this.emitDiagnostic("user_transcript_finalized", `item_id=${itemId || "unknown"}`);
           this.transition(this.snapshot.state, {
             finalUserTranscript: transcript,
             partialUserTranscript: ""
@@ -368,58 +416,90 @@ export class RealtimeVoiceSession {
         }
         break;
       case "response.created":
-        this.beginResponse(responseObjectId);
+        this.turnOwnership.beginResponse(resolvedResponseId);
         this.transition("processing");
-        this.emitDiagnostic("response_created", "response.created");
+        this.emitDiagnostic("response_created", `response_id=${resolvedResponseId || "unknown"}`);
         void audit("realtime_assistant_response_started", "response started");
         break;
+      case "response.output_item.added":
+      case "response.output_item.done":
+        this.turnOwnership.registerResponseOutput(resolvedResponseId, outputItemId);
+        break;
       case "response.output_audio.delta":
-        if (this.acceptsResponseEvent(responseId)) {
-          this.beginAssistantOutput(responseId);
+        if (this.turnOwnership.isActiveResponse(resolvedResponseId, outputItemId)) {
           this.resumeAssistantAudio();
-          this.emitDiagnostic("assistant_audio_started", "response.output_audio.delta");
+          this.emitDiagnostic(
+            "assistant_audio_started",
+            `response_id=${resolvedResponseId || "unknown"} item_id=${outputItemId || "unknown"}`
+          );
           this.transition("assistant_speaking");
         }
         break;
-      case "response.output_audio.done":
-        if (this.acceptsResponseEvent(responseId)) {
-          this.beginAssistantOutput(responseId);
-        }
-        break;
       case "response.output_audio_transcript.delta":
-        if (this.acceptsResponseEvent(responseId)) {
-          this.beginAssistantOutput(responseId);
-          this.resumeAssistantAudio();
-          this.emitDiagnostic("assistant_audio_started", "response.output_audio_transcript.delta");
-          this.transition("assistant_speaking", {
-            partialAssistantTranscript: `${this.snapshot.partialAssistantTranscript}${stringField(event, "delta")}`
-          });
+        {
+          const partial = this.turnOwnership.appendAssistantTranscript(
+            resolvedResponseId,
+            outputItemId,
+            stringField(event, "delta")
+          );
+          if (partial !== null) {
+            this.turnOwnership.registerResponseOutput(resolvedResponseId, outputItemId);
+            this.resumeAssistantAudio();
+            this.emitDiagnostic(
+              "assistant_audio_started",
+              `response_id=${resolvedResponseId || "unknown"} item_id=${outputItemId || "unknown"}`
+            );
+            this.transition("assistant_speaking", {
+              partialAssistantTranscript: partial
+            });
+          }
         }
         break;
       case "response.output_audio_transcript.done":
-        if (this.acceptsResponseEvent(responseId)) {
-          this.beginAssistantOutput(responseId);
-          this.transition("assistant_speaking", {
-            finalAssistantTranscript: stringField(event, "transcript") || this.snapshot.partialAssistantTranscript,
-            partialAssistantTranscript: ""
+        {
+          const finalTranscript = this.turnOwnership.finalizeAssistantTranscript(
+            resolvedResponseId,
+            outputItemId,
+            stringField(event, "transcript") || this.turnOwnership.getCurrentAssistantPartialTranscript()
+          );
+          if (finalTranscript !== null) {
+            this.turnOwnership.registerResponseOutput(resolvedResponseId, outputItemId);
+            this.transition("assistant_speaking", {
+              finalAssistantTranscript: finalTranscript,
+              partialAssistantTranscript: ""
+            });
+          }
+        }
+        break;
+      case "response.function_call_arguments.done":
+        if (this.turnOwnership.isActiveResponse(resolvedResponseId, outputItemId)) {
+          this.turnOwnership.registerResponseOutput(resolvedResponseId, outputItemId);
+          void this.handleFunctionCall({
+            sessionGeneration: generation,
+            responseId: resolvedResponseId,
+            outputItemId,
+            callId: stringField(event, "call_id"),
+            name: stringField(event, "name"),
+            argumentsJson: stringField(event, "arguments")
           });
         }
         break;
       case "session.created":
         this.sessionCreated = true;
         this.emitDiagnostic("session_created", "session.created");
+        this.maybeConfigureRealtimeSession(generation);
         this.maybeEnterListening();
         break;
       case "session.updated":
         this.emitDiagnostic("session_updated", "session.updated");
         break;
       case "response.done":
-        this.emitDiagnostic("response_done", "response.done");
-        this.handleResponseDone(responseObjectId || responseId);
+        this.emitDiagnostic("response_done", `response_id=${resolvedResponseId || "unknown"}`);
+        this.handleResponseDone(resolvedResponseId);
         break;
       case "response.cancelled":
-        if (this.acceptsResponseEvent(responseObjectId || responseId)) {
-          this.handleResponseCancellation(responseObjectId || responseId);
+        if (this.turnOwnership.isActiveResponse(resolvedResponseId, outputItemId)) {
+          this.handleResponseCancellation(resolvedResponseId);
         }
         break;
       case "error":
@@ -428,6 +508,41 @@ export class RealtimeVoiceSession {
       default:
         break;
     }
+  }
+
+  private async handleFunctionCall(call: {
+    sessionGeneration: number;
+    responseId: string;
+    outputItemId: string;
+    callId: string;
+    name: string;
+    argumentsJson: string;
+  }): Promise<void> {
+    const update = await this.operatorBridge.handleFunctionCall(call);
+    this.sendEvent({
+      type: "conversation.item.create",
+      item: {
+        type: "function_call_output",
+        call_id: call.callId,
+        status: update.status === "pending" ? "in_progress" : update.status === "completed" ? "completed" : "incomplete",
+        output: JSON.stringify({
+          status: update.status,
+          message: update.message
+        })
+      }
+    });
+    this.sendEvent({
+      type: "response.create",
+      response: {
+        instructions:
+          "Summarize the latest tool result for the user. If the result is pending, tell the user it is waiting for approval in Klak. Never claim success before completed.",
+        output_modalities: ["audio"]
+      }
+    });
+    this.emitDiagnostic(
+      "result_returned_to_realtime",
+      `call_id=${call.callId} response_id=${call.responseId} item_id=${call.outputItemId} status=${update.status}`
+    );
   }
 
   private attachAssistantAudio(stream: MediaStream): void {
@@ -472,10 +587,9 @@ export class RealtimeVoiceSession {
     this.peer = null;
     this.stream?.getTracks().forEach((track) => track.stop());
     this.stream = null;
-    this.currentResponseId = null;
-    this.currentUserItemId = null;
-    this.responseGenerations.clear();
-    this.userItemGenerations.clear();
+    this.turnOwnership.reset();
+    this.operatorBridge.clearPendingAction();
+    this.configuredSessionGeneration = null;
     this.micAcquired = false;
     this.peerConnected = false;
     this.dataChannelOpen = false;
@@ -508,40 +622,8 @@ export class RealtimeVoiceSession {
     this.onUpdate({ ...this.snapshot });
   }
 
-  private beginUserTurn(itemId?: string): boolean {
-    if (itemId && itemId === this.currentUserItemId) return false;
-    this.currentTurnGeneration += 1;
-    this.currentUserItemId = itemId ?? null;
-    if (itemId) {
-      this.userItemGenerations.set(itemId, this.currentTurnGeneration);
-    }
-    return true;
-  }
-
-  private acceptsUserTranscript(itemId?: string): boolean {
-    if (!itemId) return true;
-    return this.userItemGenerations.get(itemId) === this.currentTurnGeneration;
-  }
-
-  private beginResponse(responseId?: string): void {
-    if (!responseId) return;
-    this.currentResponseId = responseId;
-    this.responseGenerations.set(responseId, this.currentTurnGeneration);
-  }
-
-  private beginAssistantOutput(responseId?: string): void {
-    if (!responseId) return;
-    this.currentResponseId = responseId;
-    this.responseGenerations.set(responseId, this.currentTurnGeneration);
-  }
-
-  private acceptsResponseEvent(responseId?: string): boolean {
-    if (!responseId) return Boolean(this.currentResponseId);
-    return this.responseGenerations.get(responseId) === this.currentTurnGeneration;
-  }
-
   private handleResponseCancellation(responseId?: string): void {
-    if (responseId && this.currentResponseId && responseId !== this.currentResponseId) return;
+    this.turnOwnership.cancelResponse(responseId);
     this.pauseAssistantAudio();
     this.transition("interrupted");
     window.setTimeout(() => {
@@ -550,26 +632,43 @@ export class RealtimeVoiceSession {
   }
 
   private handleResponseDone(responseId?: string): void {
-    if (!this.acceptsResponseEvent(responseId)) return;
-    if (responseId) {
-      this.responseGenerations.delete(responseId);
-      if (this.currentResponseId === responseId) {
-        this.currentResponseId = null;
-      }
-    }
+    const completedTurn = this.turnOwnership.completeResponse(responseId);
+    if (!completedTurn) return;
 
-    const assistantTranscript = this.snapshot.finalAssistantTranscript || this.snapshot.partialAssistantTranscript;
-    this.onFinalTurn?.({
-      userTranscript: this.snapshot.finalUserTranscript,
-      assistantTranscript
-    });
+    this.onFinalTurn?.(completedTurn);
 
     if (this.snapshot.state === "user_speaking") {
       this.transition("user_speaking", { partialAssistantTranscript: "" });
       return;
     }
 
-    this.transition("listening", { partialAssistantTranscript: "" });
+    this.transition("listening", {
+      partialAssistantTranscript: "",
+      finalAssistantTranscript: completedTurn.assistantTranscript || this.turnOwnership.getCurrentAssistantFinalTranscript()
+    });
+  }
+
+  private maybeConfigureRealtimeSession(generation: number): void {
+    if (!this.isGenerationActive(generation)) return;
+    if (!this.channel || this.channel.readyState !== "open" || !this.sessionCreated) return;
+    if (this.configuredSessionGeneration === generation) return;
+
+    this.sendEvent({
+      type: "session.update",
+      session: {
+        type: "realtime",
+        instructions: this.operatorBridge.buildSessionInstructions(),
+        output_modalities: ["audio"],
+        tools: this.operatorBridge.getRealtimeTools(),
+        tool_choice: "auto"
+      }
+    });
+    this.configuredSessionGeneration = generation;
+  }
+
+  private sendEvent(payload: Record<string, unknown>): void {
+    if (!this.channel || this.channel.readyState !== "open") return;
+    this.channel.send(JSON.stringify(payload));
   }
 
   private armConnectionRecoveryTimer(generation: number): void {
@@ -630,8 +729,20 @@ async function audit(toolName: string, inputSummary: string, status: "completed"
   }).catch(() => undefined);
 }
 
+function normalizeSpokenPhrase(value: string): string {
+  return value.trim().toLowerCase().replace(/[.!?,]+$/g, "").replace(/\s+/g, " ");
+}
+
 function looksLikeSleepPhrase(value: string): boolean {
-  return /^(go to sleep|stop listening|sleep now|that's all|that is all)\.?$/i.test(value.trim());
+  const normalized = normalizeSpokenPhrase(value);
+  return [
+    "go to sleep",
+    "stop listening",
+    "go away",
+    "bye for now",
+    "that is all",
+    "end conversation"
+  ].includes(normalized);
 }
 
 function stringField(event: Record<string, unknown>, key: string): string {

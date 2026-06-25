@@ -1,7 +1,8 @@
 import { invoke } from "@tauri-apps/api/core";
 import { listen } from "@tauri-apps/api/event";
 import { createContext, useCallback, useContext, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
-import type { AppSettings } from "../types";
+import type { ActionPreview, AppSettings } from "../types";
+import { RealtimeVoiceOperatorBridge, type RealtimeVoiceOperatorUpdate } from "../lib/voice/RealtimeVoiceOperatorBridge";
 import { RealtimeVoiceSession, type RealtimeVoiceSnapshot } from "../lib/voice/realtimeVoiceSession";
 import { syncWakeListener } from "../lib/voice/wakeListener";
 
@@ -32,6 +33,7 @@ export interface GlobalVoiceState {
   snapshot: RealtimeVoiceSnapshot | null;
   diagnostics: VoiceDiagnosticEntry[];
   turns: VoiceTurn[];
+  pendingPreview: ActionPreview | null;
   listeningReady: boolean;
   canStopSpeaking: boolean;
   canEndConversation: boolean;
@@ -42,6 +44,8 @@ interface GlobalVoiceControllerContextValue extends GlobalVoiceState {
   stopSpeaking: () => void;
   endConversation: () => Promise<void>;
   retryConnection: () => Promise<void>;
+  approvePendingPreview: () => Promise<void>;
+  denyPendingPreview: () => Promise<void>;
   openAssistant: () => void;
 }
 
@@ -68,8 +72,10 @@ export function GlobalVoiceControllerProvider({
   const [phase, setPhase] = useState<VoicePhase>("idle");
   const [diagnostics, setDiagnostics] = useState<VoiceDiagnosticEntry[]>([]);
   const [turns, setTurns] = useState<VoiceTurn[]>([]);
+  const [pendingPreview, setPendingPreview] = useState<ActionPreview | null>(null);
   const [sessionGeneration, setSessionGeneration] = useState(0);
   const sessionRef = useRef<RealtimeVoiceSession | null>(null);
+  const bridgeRef = useRef<RealtimeVoiceOperatorBridge | null>(null);
   const startInFlightRef = useRef(false);
   const mountedRef = useRef(true);
   const settingsRef = useRef(settings);
@@ -143,6 +149,14 @@ export function GlobalVoiceControllerProvider({
         createdAt: new Date().toISOString()
       }
     ]);
+  }, []);
+
+  const publishOperatorUpdate = useCallback(async (update: RealtimeVoiceOperatorUpdate | null) => {
+    if (!update) return;
+    const session = sessionRef.current;
+    if (session) {
+      await session.publishOperatorUpdate(update);
+    }
   }, []);
 
   const setSessionSnapshot = useCallback(
@@ -228,6 +242,16 @@ export function GlobalVoiceControllerProvider({
     await closeSession("ended_by_user");
   }, [closeSession]);
 
+  const approvePendingPreview = useCallback(async () => {
+    const update = await bridgeRef.current?.approvePendingAction();
+    await publishOperatorUpdate(update ?? null);
+  }, [publishOperatorUpdate]);
+
+  const denyPendingPreview = useCallback(async () => {
+    const update = await bridgeRef.current?.denyPendingAction();
+    await publishOperatorUpdate(update ?? null);
+  }, [publishOperatorUpdate]);
+
   useEffect(() => {
     let cancelled = false;
     const token = ++rebuildTokenRef.current;
@@ -242,6 +266,8 @@ export function GlobalVoiceControllerProvider({
       if (cancelled || token !== rebuildTokenRef.current) return;
 
       if (!settings.setupComplete || !settings.voiceEnabled || settings.voiceConversationMode !== "openai_realtime") {
+        bridgeRef.current?.clearPendingAction();
+        setPendingPreview(null);
         setSessionGeneration(token);
         if (settings.setupComplete) {
           const wakeStatus = await syncWakeListener(settings).catch(() => undefined);
@@ -253,7 +279,17 @@ export function GlobalVoiceControllerProvider({
         return;
       }
 
-      sessionRef.current = new RealtimeVoiceSession(settings, setSessionSnapshot, handleFinalTurn, report);
+      bridgeRef.current = new RealtimeVoiceOperatorBridge(settings, {
+        onPreviewChanged: (preview) => setPendingPreview(preview),
+        onDiagnostic: report
+      });
+      sessionRef.current = new RealtimeVoiceSession(
+        settings,
+        bridgeRef.current,
+        setSessionSnapshot,
+        handleFinalTurn,
+        report
+      );
       setSessionGeneration(token);
       const wakeStatus = await syncWakeListener(settings).catch(() => undefined);
       if (wakeStatus?.running) {
@@ -304,12 +340,13 @@ export function GlobalVoiceControllerProvider({
       snapshot,
       diagnostics,
       turns,
+      pendingPreview,
       listeningReady,
       canStopSpeaking: Boolean(snapshot && ["assistant_speaking", "processing", "interrupted"].includes(snapshot.state)),
       canEndConversation: Boolean(snapshot && snapshot.state !== "idle"),
       canRetry: Boolean(snapshot && ["error", "reconnecting", "connecting", "awakening", "listening", "assistant_speaking", "processing", "interrupted"].includes(snapshot.state))
     };
-  }, [diagnostics, phase, sessionGeneration, snapshot, turns, settings.voiceConversationMode, settings.voiceEnabled]);
+  }, [diagnostics, pendingPreview, phase, sessionGeneration, snapshot, turns, settings.voiceConversationMode, settings.voiceEnabled]);
 
   const value = useMemo<GlobalVoiceControllerContextValue>(
     () => ({
@@ -317,9 +354,11 @@ export function GlobalVoiceControllerProvider({
       stopSpeaking,
       endConversation,
       retryConnection,
+      approvePendingPreview,
+      denyPendingPreview,
       openAssistant: onOpenAssistant
     }),
-    [endConversation, onOpenAssistant, retryConnection, state, stopSpeaking]
+    [approvePendingPreview, denyPendingPreview, endConversation, onOpenAssistant, retryConnection, state, stopSpeaking]
   );
 
   return <VoiceControllerContext.Provider value={value}>{children}</VoiceControllerContext.Provider>;

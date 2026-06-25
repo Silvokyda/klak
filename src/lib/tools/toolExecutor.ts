@@ -17,16 +17,29 @@ import {
   validateHttpUrl
 } from "./safeToolUtils";
 
-export async function executeApprovedTool(preview: ActionPreview, settings: AppSettings): Promise<void> {
-  if (!preview.canRun) return;
+export async function executeApprovedTool(preview: ActionPreview, settings: AppSettings): Promise<string> {
+  if (!preview.canRun) return "Tool execution was skipped because the preview is blocked.";
   await updateActionLog(preview.id, { status: "running" });
 
   try {
     if (preview.tool.name === "open_url") {
-      await openUrl(validateHttpUrl(preview.input.url));
+      const url = validateHttpUrl(preview.input.url);
+      await openUrl(url);
+      await updateActionLog(preview.id, {
+        status: "completed",
+        user_approved: true,
+        completed_at: nowIso()
+      });
+      return `Opened ${url}.`;
     } else if (preview.tool.name === "open_folder") {
       const path = await assertAllowedFolder(String(preview.input.path ?? ""), settings);
       await openPath(path);
+      await updateActionLog(preview.id, {
+        status: "completed",
+        user_approved: true,
+        completed_at: nowIso()
+      });
+      return "Opened the allowed folder.";
     } else if (preview.tool.name === "create_memory") {
       if (looksSensitive(String(preview.input.content ?? ""))) {
         throw new Error("Klak will not save content that appears to contain secrets as memory.");
@@ -37,22 +50,52 @@ export async function executeApprovedTool(preview: ActionPreview, settings: AppS
         content: String(preview.input.content ?? ""),
         source: String(preview.input.source ?? "action_preview")
       });
+      await updateActionLog(preview.id, {
+        status: "completed",
+        user_approved: true,
+        completed_at: nowIso()
+      });
+      return `Saved memory "${String(preview.input.title ?? "Untitled memory")}".`;
     } else if (preview.tool.name === "search_memory") {
       await searchMemories(String(preview.input.query ?? ""));
+      await updateActionLog(preview.id, {
+        status: "completed",
+        user_approved: true,
+        completed_at: nowIso()
+      });
+      return "Completed the local memory search.";
     } else if (preview.tool.name === "create_note") {
       const path = await assertPathInsideAllowedFolder(String(preview.input.path ?? ""), settings);
       await invoke("create_markdown_note", {
         path,
         content: buildNoteMarkdown(String(preview.input.title ?? "Klak Note"), String(preview.input.content ?? ""))
       });
+      await updateActionLog(preview.id, {
+        status: "completed",
+        user_approved: true,
+        completed_at: nowIso()
+      });
+      return `Created "${String(preview.input.title ?? "Klak Note")}".`;
     } else if (preview.tool.name === "copy_to_clipboard") {
       await invoke("copy_text_to_clipboard", { text: String(preview.input.text ?? "") });
+      await updateActionLog(preview.id, {
+        status: "completed",
+        user_approved: true,
+        completed_at: nowIso()
+      });
+      return "Copied the text to the clipboard.";
     } else if (preview.tool.name === "launch_app") {
       validateExecutablePath(String(preview.input.executable_path ?? ""));
       await invoke("launch_registered_app", {
         input: { executable_path: String(preview.input.executable_path) }
       });
       await touchRegisteredApp(String(preview.input.registered_app_id ?? ""));
+      await updateActionLog(preview.id, {
+        status: "completed",
+        user_approved: true,
+        completed_at: nowIso()
+      });
+      return `${String(preview.input.app_name ?? "The application")} launch completed.`;
     } else if (preview.tool.name === "run_command_template") {
       validateCommandSafety(String(preview.input.command ?? ""));
       await assertPathInsideAllowedFolder(String(preview.input.working_directory ?? ""), settings);
@@ -69,6 +112,12 @@ export async function executeApprovedTool(preview: ActionPreview, settings: AppS
         throw new Error(summary);
       }
       await touchCommandTemplate(String(preview.input.command_template_id ?? ""), summary);
+      await updateActionLog(preview.id, {
+        status: "completed",
+        user_approved: true,
+        completed_at: nowIso()
+      });
+      return summary;
     } else if (preview.tool.name === "start_background_process") {
       validateCommandSafety(String(preview.input.command ?? ""));
       await assertPathInsideAllowedFolder(String(preview.input.working_directory ?? ""), settings);
@@ -102,15 +151,15 @@ export async function executeApprovedTool(preview: ActionPreview, settings: AppS
         last_output_preview: "Started running activity."
       });
       await touchCommandTemplate(process.command_template_id, `Started running activity pid ${result.pid}`);
+      await updateActionLog(preview.id, {
+        status: "completed",
+        user_approved: true,
+        completed_at: nowIso()
+      });
+      return `Started running activity pid ${result.pid}.`;
     } else {
       throw new Error(`${preview.tool.label} is registered but execution is stubbed in this MVP.`);
     }
-
-    await updateActionLog(preview.id, {
-      status: "completed",
-      user_approved: true,
-      completed_at: nowIso()
-    });
   } catch (error) {
     await updateActionLog(preview.id, {
       status: "failed",

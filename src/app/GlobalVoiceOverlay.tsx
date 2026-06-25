@@ -1,4 +1,5 @@
 import { Bot, MicOff, PlayCircle, Radio, Square, Sparkles } from "lucide-react";
+import { ActionPreviewCard } from "../components/ActionPreviewCard";
 import { useGlobalVoiceController } from "./GlobalVoiceController";
 
 export function GlobalVoiceOverlay() {
@@ -37,6 +38,17 @@ export function GlobalVoiceOverlay() {
         <div className="global-voice-overlay__diagnostic">
           <Sparkles size={14} />
           <span>{lastDiagnostic.message}</span>
+        </div>
+      )}
+
+      {voice.pendingPreview && (
+        <div className="global-voice-overlay__preview">
+          <ActionPreviewCard
+            preview={voice.pendingPreview}
+            onApprove={() => voice.approvePendingPreview()}
+            onDeny={() => voice.denyPendingPreview()}
+            onDone={() => undefined}
+          />
         </div>
       )}
 

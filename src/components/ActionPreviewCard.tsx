@@ -6,11 +6,13 @@ import { executeApprovedTool } from "../lib/tools/toolExecutor";
 
 interface Props {
   preview: ActionPreview;
-  settings: AppSettings;
+  settings?: AppSettings;
+  onApprove?: () => Promise<void>;
+  onDeny?: () => Promise<void>;
   onDone: () => void;
 }
 
-export function ActionPreviewCard({ preview, settings, onDone }: Props) {
+export function ActionPreviewCard({ preview, settings, onApprove, onDeny, onDone }: Props) {
   const [error, setError] = useState<string | null>(null);
   const [running, setRunning] = useState(false);
 
@@ -18,8 +20,13 @@ export function ActionPreviewCard({ preview, settings, onDone }: Props) {
     setError(null);
     setRunning(true);
     try {
-      await approveAction(preview.id);
-      await executeApprovedTool(preview, settings);
+      if (onApprove) {
+        await onApprove();
+      } else {
+        if (!settings) throw new Error("Settings are required to execute this preview.");
+        await approveAction(preview.id);
+        await executeApprovedTool(preview, settings);
+      }
       onDone();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : String(caught));
@@ -28,7 +35,11 @@ export function ActionPreviewCard({ preview, settings, onDone }: Props) {
   }
 
   async function deny() {
-    await denyAction(preview.id);
+    if (onDeny) {
+      await onDeny();
+    } else {
+      await denyAction(preview.id);
+    }
     onDone();
   }
 
