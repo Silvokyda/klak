@@ -61,7 +61,7 @@ export const defaultSettings: AppSettings = {
   pushToTalkEnabled: true,
   voiceConversationMode: "local_push_to_talk",
   voiceInputProvider: "openai_transcription",
-  realtimeVoiceModel: "gpt-4o-realtime-preview",
+  realtimeVoiceModel: "gpt-realtime-2",
   realtimeVoiceName: "alloy",
   voiceOutputProvider: "disabled",
   voiceOutputVoiceName: "",

@@ -26,26 +26,61 @@ const initialSnapshot: RealtimeVoiceSnapshot = {
 export function RealtimeVoicePanel({ settings, onFinalTurn }: Props) {
   const [snapshot, setSnapshot] = useState<RealtimeVoiceSnapshot>(initialSnapshot);
   const sessionRef = useRef<RealtimeVoiceSession | null>(null);
+  const generationRef = useRef(0);
+  const mountedRef = useRef(false);
 
   useEffect(() => {
-    sessionRef.current?.close("settings_changed");
-    sessionRef.current = new RealtimeVoiceSession(settings, setSnapshot, onFinalTurn);
-
+    mountedRef.current = true;
     return () => {
+      mountedRef.current = false;
+      generationRef.current += 1;
       void sessionRef.current?.close("component_unmounted");
       sessionRef.current = null;
+    };
+  }, []);
+
+  useEffect(() => {
+    const generation = ++generationRef.current;
+    let cancelled = false;
+
+    const snapshotGuard = (nextSnapshot: RealtimeVoiceSnapshot) => {
+      if (!mountedRef.current || cancelled || generationRef.current !== generation) return;
+      setSnapshot(nextSnapshot);
+    };
+
+    const finalTurnGuard = (turn: { userTranscript: string; assistantTranscript: string }) => {
+      if (!mountedRef.current || cancelled || generationRef.current !== generation) return;
+      onFinalTurn(turn);
+    };
+
+    const initialize = async () => {
+      const existing = sessionRef.current;
+      sessionRef.current = null;
+      if (existing) {
+        await existing.close("settings_changed");
+      }
+
+      if (cancelled || !mountedRef.current || generationRef.current !== generation) return;
+
+      const nextSession = new RealtimeVoiceSession(settings, snapshotGuard, finalTurnGuard);
+      sessionRef.current = nextSession;
+      if (mountedRef.current && generationRef.current === generation) {
+        setSnapshot(nextSession.getSnapshot());
+      }
+    };
+
+    void initialize();
+
+    return () => {
+      cancelled = true;
     };
   }, [settings, onFinalTurn]);
 
   useEffect(() => {
-    const wake = listen("klak-wake-detected", () => {
-      void sessionRef.current?.start("wake");
-    });
     const summoned = listen("klak-summoned", () => {
       void sessionRef.current?.start("summon");
     });
     return () => {
-      wake.then((dispose) => dispose());
       summoned.then((dispose) => dispose());
     };
   }, []);

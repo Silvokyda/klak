@@ -9,9 +9,8 @@ import {
   UserRound,
   Volume2
 } from "lucide-react";
-import { listen } from "@tauri-apps/api/event";
 import { invoke } from "@tauri-apps/api/core";
-import { useCallback, useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { ActionPreviewCard } from "../../components/ActionPreviewCard";
 import { OperatorTaskPanel } from "../../components/OperatorTaskPanel";
 import { ScreenHeader } from "../../components/ScreenHeader";
@@ -19,13 +18,11 @@ import type { ActionPreview, AppSettings, ChatMessage, OperatorTaskRunHydrated }
 import { sendChatMessage } from "../../lib/ai/chatOrchestrator";
 import { id, nowIso } from "../../lib/utils";
 import { buildActionPreviewForSuggestion } from "../../lib/tools/toolProposals";
-import { VoiceRecorder } from "../../components/VoiceRecorder";
-import { RealtimeVoicePanel } from "../../components/RealtimeVoicePanel";
 import { speakText } from "../../lib/voice/transcription";
 import { approveAction, denyAction } from "../../lib/permissions/policy";
 import { executeApprovedTool } from "../../lib/tools/toolExecutor";
 import { createPlannedOperatorTask, runOperatorTask } from "../../lib/operator/operatorRuntime";
-import { createActionLog } from "../../lib/logs/actionLogRepository";
+import { useGlobalVoiceController } from "../../app/GlobalVoiceController";
 
 const starterPrompts = [
   "Remember that I prefer local-first tools.",
@@ -47,12 +44,12 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
   const [preview, setPreview] = useState<ActionPreview | null>(null);
   const [busy, setBusy] = useState(false);
   const [voiceMessage, setVoiceMessage] = useState<string | null>(null);
-  const [wakeNotice, setWakeNotice] = useState<string | null>(null);
-  const [autoVoiceSignal, setAutoVoiceSignal] = useState(0);
   const [operatorRun, setOperatorRun] = useState<OperatorTaskRunHydrated | null>(null);
 
+  const voice = useGlobalVoiceController();
   const threadRef = useRef<HTMLDivElement | null>(null);
   const previewRef = useRef<ActionPreview | null>(null);
+  const deliveredVoiceTurnsRef = useRef(0);
 
   useEffect(() => {
     previewRef.current = preview;
@@ -65,44 +62,28 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
   }, [messages, busy]);
 
   useEffect(() => {
-    const unlisten = listen("klak-summoned", () => {
-      if (settings.voiceConversationMode === "openai_realtime") return;
-      const spoken = speakText("I'm listening.", settings);
-      if (spoken) setVoiceMessage(spoken);
-      window.setTimeout(() => {
-        setAutoVoiceSignal((value) => value + 1);
-      }, 900);
-    });
-
-    return () => {
-      unlisten.then((dispose) => dispose());
-    };
-  }, [settings]);
-
-  useEffect(() => {
-    const unlisten = listen<{ model?: string; score?: number; threshold?: number }>("klak-wake-detected", (event) => {
-      const score = typeof event.payload.score === "number" ? event.payload.score : null;
-      const threshold = typeof event.payload.threshold === "number" ? event.payload.threshold : null;
-      const model = event.payload.model || settings.wakeWordModel || "wake word";
-      const summary = `Wake word detected - opening voice session${
-        score === null ? "" : ` (${score.toFixed(3)} / ${threshold?.toFixed(2) ?? "?"})`
-      }.`;
-      setWakeNotice(summary);
-      void updateCaption(summary);
-      void createActionLog({
-        tool_name: "wake_word_detected",
-        input_summary: `model: ${model}, score: ${score ?? "unknown"}, threshold: ${threshold ?? "unknown"}`,
-        risk_level: "medium",
-        status: "completed",
-        user_approved: true
-      });
-      window.setTimeout(() => setWakeNotice(null), 8000);
-    });
-
-    return () => {
-      unlisten.then((dispose) => dispose());
-    };
-  }, [settings.wakeWordModel]);
+    const nextTurns = voice.turns.slice(deliveredVoiceTurnsRef.current);
+    if (!nextTurns.length) return;
+    deliveredVoiceTurnsRef.current = voice.turns.length;
+    setMessages((items) => [
+      ...items,
+      ...nextTurns.flatMap((turn) => {
+        const additions: ChatMessage[] = [];
+        if (turn.userTranscript.trim()) {
+          additions.push({ id: id("msg"), role: "user", content: turn.userTranscript.trim(), createdAt: turn.createdAt });
+        }
+        if (turn.assistantTranscript.trim()) {
+          additions.push({
+            id: id("msg"),
+            role: "assistant",
+            content: turn.assistantTranscript.trim(),
+            createdAt: turn.createdAt
+          });
+        }
+        return additions;
+      })
+    ]);
+  }, [voice.turns]);
 
   async function submit(overrideText?: string) {
     const content = (overrideText ?? input).trim();
@@ -152,9 +133,6 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
           const spoken = speakText(`${nextPreview.message} Can I do this? Say yes or no.`, settings);
           if (spoken) setVoiceMessage(spoken);
           void updateCaption(`${nextPreview.message} Say yes or no.`);
-          window.setTimeout(() => {
-            setAutoVoiceSignal((value) => value + 1);
-          }, 2600);
         }
       } else {
         const spoken = speakText(response.message, settings);
@@ -165,21 +143,6 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
       setBusy(false);
     }
   }
-
-  const addRealtimeTurn = useCallback((turn: { userTranscript: string; assistantTranscript: string }) => {
-    const userTranscript = turn.userTranscript.trim();
-    const assistantTranscript = turn.assistantTranscript.trim();
-    if (!userTranscript && !assistantTranscript) return;
-    setMessages((items) => [
-      ...items,
-      ...(userTranscript
-        ? [{ id: id("msg"), role: "user" as const, content: userTranscript, createdAt: nowIso() }]
-        : []),
-      ...(assistantTranscript
-        ? [{ id: id("msg"), role: "assistant" as const, content: assistantTranscript, createdAt: nowIso() }]
-        : [])
-    ]);
-  }, []);
 
   async function runAsTask() {
     const content = input.trim();
@@ -402,10 +365,6 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
 
       <OperatorTaskPanel run={operatorRun} settings={settings} onChange={setOperatorRun} />
 
-      {settings.voiceEnabled && settings.voiceConversationMode === "openai_realtime" && (
-        <RealtimeVoicePanel settings={settings} onFinalTurn={addRealtimeTurn} />
-      )}
-
       <form
         className="operator-composer"
         onSubmit={(event) => {
@@ -419,21 +378,6 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
             onChange={(event) => setInput(event.target.value)}
             placeholder="Ask Klak to remember something, open an app, help with a routine, or run a task..."
           />
-          {settings.voiceConversationMode === "local_push_to_talk" && (
-            <VoiceRecorder
-              settings={settings}
-              onTranscript={(text) => submit(text)}
-              onStatus={(message) => {
-                void updateCaption(message);
-                if (/failed|disabled|configure|api key|microphone|not available|ignored|match/i.test(message)) {
-                  const spoken = speakText(message, settings);
-                  if (spoken) setVoiceMessage(spoken);
-                }
-              }}
-              autoStartSignal={autoVoiceSignal}
-              autoStopAfterMs={9000}
-            />
-          )}
         </div>
 
         <button className="primary send-button" disabled={busy || !input.trim()}>
@@ -447,7 +391,6 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
       </form>
 
       {voiceMessage && <p className="warning">{voiceMessage}</p>}
-      {wakeNotice && <p className="inline-status">{wakeNotice}</p>}
     </div>
   );
 }

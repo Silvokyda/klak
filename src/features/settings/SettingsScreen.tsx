@@ -787,7 +787,7 @@ export function SettingsScreen({
                   <input
                     value={draft.realtimeVoiceModel}
                     onChange={(event) => setDraft({ ...draft, realtimeVoiceModel: event.target.value })}
-                    placeholder="gpt-4o-realtime-preview"
+                    placeholder="gpt-realtime-2"
                   />
                 </label>
 

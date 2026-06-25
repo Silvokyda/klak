@@ -18,7 +18,8 @@ import { defaultSettings, loadSettings, saveSettings } from "../lib/storage/sett
 import { labelPermissionMode } from "../lib/utils";
 import { initDatabase } from "../lib/db/database";
 import { listRunningBackgroundProcesses, markProcessStopped, updateBackgroundProcess } from "../lib/processes/backgroundProcessRepository";
-import { syncWakeListener } from "../lib/voice/wakeListener";
+import { GlobalVoiceControllerProvider } from "./GlobalVoiceController";
+import { GlobalVoiceOverlay } from "./GlobalVoiceOverlay";
 import klakLogo from "../../assets/klak-icon.png";
 
 type View = "assistant" | "memory" | "projects" | "workflows" | "apps" | "commands" | "processes" | "tools" | "logs" | "diagnostics" | "settings";
@@ -34,24 +35,6 @@ export function App() {
       setReady(true);
     });
   }, []);
-
-  useEffect(() => {
-    if (!ready || !settings.setupComplete) return;
-    syncWakeListener(settings).catch((error) => {
-      console.warn("Wake listener sync failed", error);
-    });
-  }, [
-    ready,
-    settings.setupComplete,
-    settings.wakeWordEnabled,
-    settings.wakeWordPythonPath,
-    settings.wakeWordModel,
-    settings.wakeWordCustomModelPath,
-    settings.wakeWordThreshold,
-    settings.wakeWordDiagnosticsEnabled,
-    settings.wakeWordDeviceName,
-    settings.wakeWordDeviceIndex
-  ]);
 
   async function updateSettings(next: AppSettings) {
     setSettings(next);
@@ -82,48 +65,52 @@ export function App() {
   }
 
   return (
-    <div className="shell">
-      <aside className="sidebar">
-        <div className="brand">
-          <div className="mark app-logo-mark">
-            <img src={klakLogo} alt="" />
+    <GlobalVoiceControllerProvider settings={settings} onOpenAssistant={() => setView("assistant")}>
+      <div className="shell">
+        <aside className="sidebar">
+          <div className="brand">
+            <div className="mark app-logo-mark">
+              <img src={klakLogo} alt="" />
+            </div>
+            <div>
+              <h1>Klak</h1>
+              <p>your local AI operator</p>
+            </div>
           </div>
-          <div>
-            <h1>Klak</h1>
-            <p>your local AI operator</p>
+          <nav>
+            {nav.map((item) => {
+              const Icon = item.icon;
+              return (
+                <button className={view === item.id ? "active" : ""} key={item.id} onClick={() => setView(item.id)}>
+                  <Icon size={18} />
+                  {item.label}
+                </button>
+              );
+            })}
+          </nav>
+          <div className="mode-pill">
+            <ShieldCheck size={16} />
+            {labelPermissionMode(settings.permissionMode)}
           </div>
-        </div>
-        <nav>
-          {nav.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button className={view === item.id ? "active" : ""} key={item.id} onClick={() => setView(item.id)}>
-                <Icon size={18} />
-                {item.label}
-              </button>
-            );
-          })}
-        </nav>
-        <div className="mode-pill">
-          <ShieldCheck size={16} />
-          {labelPermissionMode(settings.permissionMode)}
-        </div>
-      </aside>
+        </aside>
 
-      <main className="main">
-        {view === "assistant" && <AssistantScreen settings={settings} />}
-        {view === "memory" && <MemoryScreen />}
-        {view === "projects" && <ProjectsScreen settings={settings} />}
-        {view === "workflows" && <WorkflowsScreen settings={settings} />}
-        {view === "apps" && <AppsScreen settings={settings} />}
-        {view === "commands" && <CommandsScreen settings={settings} />}
-        {view === "processes" && <ProcessesScreen />}
-        {view === "tools" && <ToolsScreen settings={settings} onSettingsChange={updateSettings} />}
-        {view === "logs" && <LogsScreen />}
-        {view === "diagnostics" && <DiagnosticsScreen settings={settings} />}
-        {view === "settings" && <SettingsScreen settings={settings} onSettingsChange={updateSettings} />}
-      </main>
-    </div>
+        <main className="main">
+          {view === "assistant" && <AssistantScreen settings={settings} />}
+          {view === "memory" && <MemoryScreen />}
+          {view === "projects" && <ProjectsScreen settings={settings} />}
+          {view === "workflows" && <WorkflowsScreen settings={settings} />}
+          {view === "apps" && <AppsScreen settings={settings} />}
+          {view === "commands" && <CommandsScreen settings={settings} />}
+          {view === "processes" && <ProcessesScreen />}
+          {view === "tools" && <ToolsScreen settings={settings} onSettingsChange={updateSettings} />}
+          {view === "logs" && <LogsScreen />}
+          {view === "diagnostics" && <DiagnosticsScreen settings={settings} />}
+          {view === "settings" && <SettingsScreen settings={settings} onSettingsChange={updateSettings} />}
+        </main>
+
+        <GlobalVoiceOverlay />
+      </div>
+    </GlobalVoiceControllerProvider>
   );
 }
 

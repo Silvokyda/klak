@@ -5,6 +5,8 @@ use tauri::{
 };
 use tauri_plugin_sql::{Migration, MigrationKind};
 use wait_timeout::ChildExt;
+use reqwest::Url;
+use uuid::Uuid;
 
 use std::collections::hash_map::DefaultHasher;
 use std::collections::HashMap;
@@ -478,24 +480,70 @@ fn has_secret(key: String) -> Result<bool, String> {
     get_secret(key).map(|value| value.is_some())
 }
 
+fn normalize_trusted_realtime_base_url(raw: &str) -> Result<Url, String> {
+    let trimmed = raw.trim().trim_end_matches('/');
+    if trimmed.is_empty() {
+        return Err("OpenAI provider base URL is required.".into());
+    }
+
+    let normalized = format!("{trimmed}/");
+    let parsed = Url::parse(&normalized).map_err(|error| format!("Provider base URL is invalid: {error}"))?;
+    match parsed.scheme() {
+        "https" => Ok(parsed),
+        "http" => {
+            let host = parsed.host_str().unwrap_or("");
+            let is_loopback = matches!(host, "localhost" | "127.0.0.1" | "::1") || host.ends_with(".localhost");
+            if is_loopback {
+                Ok(parsed)
+            } else {
+                Err("Non-local provider base URLs must use https.".into())
+            }
+        }
+        other => Err(format!("Unsupported provider base URL scheme: {other}")),
+    }
+}
+
+fn get_or_create_realtime_safety_identifier() -> Result<String, String> {
+    const SAFETY_IDENTIFIER_SECRET: &str = "openai_realtime_safety_identifier";
+    if let Some(value) = get_secret(SAFETY_IDENTIFIER_SECRET.into())? {
+        return Ok(value);
+    }
+
+    let identifier = format!("klak-{}", Uuid::new_v4().simple());
+    save_secret(SAFETY_IDENTIFIER_SECRET.into(), identifier.clone())?;
+    Ok(identifier)
+}
+
 #[tauri::command]
-fn create_realtime_session(input: RealtimeSessionInput) -> Result<RealtimeSessionOutput, String> {
+async fn create_realtime_session(input: RealtimeSessionInput) -> Result<RealtimeSessionOutput, String> {
     let api_key = get_secret("ai_api_key".into())?
         .ok_or_else(|| "Add your OpenAI API key in Settings before using realtime voice.".to_string())?;
-    let base_url = input.api_base_url.trim().trim_end_matches('/');
-    let endpoint = format!("{base_url}/realtime/client_secrets");
     let model = if input.model.trim().is_empty() {
-        "gpt-4o-realtime-preview".to_string()
+        "gpt-realtime-2".to_string()
     } else {
         input.model.trim().to_string()
     };
+
+    let base_url = normalize_trusted_realtime_base_url(&input.api_base_url)?;
+    let client_secret_url = base_url
+        .join("realtime/client_secrets")
+        .map_err(|error| format!("Realtime client secret URL is invalid: {error}"))?;
+    let calls_url = base_url
+        .join("realtime/calls")
+        .map_err(|error| format!("Realtime calls URL is invalid: {error}"))?;
+
+    let safety_identifier = get_or_create_realtime_safety_identifier()?;
+    let instructions = input.instructions.unwrap_or_else(|| {
+        "You are Klak, a concise local-first desktop assistant. Do not execute tools directly; describe proposed actions for the app to preview and approve."
+            .into()
+    });
 
     let body = serde_json::json!({
         "session": {
             "type": "realtime",
             "model": model,
-            "modalities": ["audio", "text"],
-            "instructions": input.instructions.unwrap_or_else(|| "You are Klak, a concise local-first desktop assistant. Do not execute tools directly; describe proposed actions for the app to preview and approve.".into()),
+            "output_modalities": ["audio"],
+            "instructions": instructions,
             "audio": {
                 "input": {
                     "format": { "type": "audio/pcm", "rate": 24000 },
@@ -513,31 +561,37 @@ fn create_realtime_session(input: RealtimeSessionInput) -> Result<RealtimeSessio
                     }
                 },
                 "output": {
-                    "format": { "type": "audio/pcm", "rate": 24000 },
+                    "format": { "type": "audio/pcm" },
                     "voice": input.voice.unwrap_or_else(|| "alloy".into())
                 }
             }
         }
     });
 
-    let response = ureq::post(&endpoint)
-        .set("Authorization", &format!("Bearer {api_key}"))
-        .set("Content-Type", "application/json")
-        .send_json(body);
+    let response = reqwest::Client::new()
+        .post(client_secret_url.clone())
+        .header("Authorization", format!("Bearer {api_key}"))
+        .header("OpenAI-Safety-Identifier", safety_identifier)
+        .json(&body)
+        .send()
+        .await
+        .map_err(|error| format!("Realtime credential request failed: {error}"))?;
 
-    let value: serde_json::Value = match response {
-        Ok(response) => response
-            .into_json()
-            .map_err(|error| format!("Realtime credential response was not valid JSON: {error}"))?,
-        Err(ureq::Error::Status(status, response)) => {
-            let body = response.into_string().unwrap_or_default();
-            return Err(format!(
-                "Realtime credential request returned {status}. {}",
-                redact_provider_error(&body)
-            ));
-        }
-        Err(error) => return Err(format!("Realtime credential request failed: {error}")),
-    };
+    let status = response.status();
+    let response_text = response
+        .text()
+        .await
+        .map_err(|error| format!("Realtime credential response could not be read: {error}"))?;
+
+    if !status.is_success() {
+        return Err(format!(
+            "Realtime credential request returned {status}. {}",
+            redact_provider_error(&response_text)
+        ));
+    }
+
+    let value: serde_json::Value = serde_json::from_str(&response_text)
+        .map_err(|error| format!("Realtime credential response was not valid JSON: {error}"))?;
 
     let client_secret = value
         .pointer("/client_secret/value")
@@ -560,7 +614,7 @@ fn create_realtime_session(input: RealtimeSessionInput) -> Result<RealtimeSessio
         client_secret,
         model: returned_model,
         expires_at,
-        endpoint: endpoint.replace("/client_secrets", "/calls"),
+        endpoint: calls_url.to_string(),
     })
 }
 
@@ -2846,7 +2900,7 @@ fn handle_wake_listener_event(app: &tauri::AppHandle, line: &str) {
                 .unwrap_or_default();
             eprintln!("wake-listener: wake detected score={score:.4}");
             let _ = app.emit_to("main", "klak-wake-detected", parsed.clone());
-            show_voice_caption(app, "Wake word detected - opening voice session");
+            show_voice_caption(app, "Wake detected - starting voice session");
             start_voice_session(app);
         }
         "warning" => {
@@ -2898,7 +2952,7 @@ fn start_voice_session(app: &tauri::AppHandle) {
         let _ = window.unminimize();
         let _ = window.set_focus();
     }
-    show_voice_caption(app, "I'm listening...");
+    show_voice_caption(app, "Connecting voice session...");
     let _ = app.emit_to("main", "klak-summoned", ());
 }
 
