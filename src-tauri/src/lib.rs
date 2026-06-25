@@ -383,6 +383,8 @@ struct RealtimeSessionOutput {
     endpoint: String,
 }
 
+const REALTIME_PCM_AUDIO_RATE: u32 = 24_000;
+
 #[derive(Clone, PartialEq)]
 enum WakeListenerState {
     Stopped,
@@ -514,6 +516,44 @@ fn get_or_create_realtime_safety_identifier() -> Result<String, String> {
     Ok(identifier)
 }
 
+fn build_realtime_session_body(model: &str, instructions: &str, voice: &str) -> serde_json::Value {
+    serde_json::json!({
+        "session": {
+            "type": "realtime",
+            "model": model,
+            "output_modalities": ["audio"],
+            "instructions": instructions,
+            "audio": {
+                "input": {
+                    "format": {
+                        "type": "audio/pcm",
+                        "rate": REALTIME_PCM_AUDIO_RATE
+                    },
+                    "transcription": {
+                        "model": "gpt-realtime-whisper",
+                        "language": "en"
+                    },
+                    "turn_detection": {
+                        "type": "server_vad",
+                        "threshold": 0.5,
+                        "prefix_padding_ms": 300,
+                        "silence_duration_ms": 650,
+                        "create_response": true,
+                        "interrupt_response": true
+                    }
+                },
+                "output": {
+                    "format": {
+                        "type": "audio/pcm",
+                        "rate": REALTIME_PCM_AUDIO_RATE
+                    },
+                    "voice": voice
+                }
+            }
+        }
+    })
+}
+
 #[tauri::command]
 async fn create_realtime_session(input: RealtimeSessionInput) -> Result<RealtimeSessionOutput, String> {
     let api_key = get_secret("ai_api_key".into())?
@@ -537,36 +577,8 @@ async fn create_realtime_session(input: RealtimeSessionInput) -> Result<Realtime
         "You are Klak, a concise local-first desktop assistant. Do not execute tools directly; describe proposed actions for the app to preview and approve."
             .into()
     });
-
-    let body = serde_json::json!({
-        "session": {
-            "type": "realtime",
-            "model": model,
-            "output_modalities": ["audio"],
-            "instructions": instructions,
-            "audio": {
-                "input": {
-                    "format": { "type": "audio/pcm", "rate": 24000 },
-                    "transcription": {
-                        "model": "gpt-realtime-whisper",
-                        "language": "en"
-                    },
-                    "turn_detection": {
-                        "type": "server_vad",
-                        "threshold": 0.5,
-                        "prefix_padding_ms": 300,
-                        "silence_duration_ms": 650,
-                        "create_response": true,
-                        "interrupt_response": true
-                    }
-                },
-                "output": {
-                    "format": { "type": "audio/pcm" },
-                    "voice": input.voice.unwrap_or_else(|| "alloy".into())
-                }
-            }
-        }
-    });
+    let voice = input.voice.unwrap_or_else(|| "alloy".into());
+    let body = build_realtime_session_body(&model, &instructions, &voice);
 
     let response = reqwest::Client::new()
         .post(client_secret_url.clone())
@@ -3180,4 +3192,54 @@ pub fn run() {
                 }
             }
         });
+}
+
+#[cfg(test)]
+mod tests {
+    use super::build_realtime_session_body;
+    use serde_json::json;
+
+    #[test]
+    fn realtime_session_body_includes_pcm_sample_rates_for_input_and_output() {
+        let body = build_realtime_session_body("gpt-realtime-2", "Test instructions", "alloy");
+
+        assert_eq!(
+            body,
+            json!({
+                "session": {
+                    "type": "realtime",
+                    "model": "gpt-realtime-2",
+                    "output_modalities": ["audio"],
+                    "instructions": "Test instructions",
+                    "audio": {
+                        "input": {
+                            "format": {
+                                "type": "audio/pcm",
+                                "rate": 24000
+                            },
+                            "transcription": {
+                                "model": "gpt-realtime-whisper",
+                                "language": "en"
+                            },
+                            "turn_detection": {
+                                "type": "server_vad",
+                                "threshold": 0.5,
+                                "prefix_padding_ms": 300,
+                                "silence_duration_ms": 650,
+                                "create_response": true,
+                                "interrupt_response": true
+                            }
+                        },
+                        "output": {
+                            "format": {
+                                "type": "audio/pcm",
+                                "rate": 24000
+                            },
+                            "voice": "alloy"
+                        }
+                    }
+                }
+            })
+        );
+    }
 }
