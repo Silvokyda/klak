@@ -54,3 +54,7 @@ src-tauri/bundle/
 tmp/
 temp/
 *.tmp
+
+# Python generated files
+__pycache__/
+*.py[cod]
