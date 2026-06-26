@@ -1,9 +1,15 @@
 import type { AppSettings, ToolActionInput } from "../../types";
 import { createActionPreview } from "../permissions/policy";
-import { getRegisteredAppById, validateExecutablePath } from "../apps/registeredAppsRepository";
+import {
+  getRegisteredAppById,
+  validateExecutablePath
+} from "../apps/registeredAppsRepository";
 import { getCommandTemplateById, isLongRunningCommand, validateCommandSafety } from "../commands/commandTemplateRepository";
 import { listRunningBackgroundProcesses } from "../processes/backgroundProcessRepository";
 import { listTools } from "./toolRegistry";
+import { scanInstalledApps } from "../apps/appDiscoveryService";
+import { resolveSafeDiscoveredAppCandidate } from "../apps/appDiscoveryService";
+import { resolveAppAction } from "../apps/appActionResolver";
 import {
   assertAllowedFolder,
   assertPathInsideAllowedFolder,
@@ -63,6 +69,26 @@ async function normalizeInput(action: ToolActionInput, settings: AppSettings): P
   if (action.toolName === "search_memory") {
     return { query: String(action.input.query ?? "") };
   }
+  if (action.toolName === "scan_installed_apps") {
+    const matches = await scanInstalledApps(settings);
+    return {
+      registered_executable_paths: action.input.registered_executable_paths ?? [],
+      app_name: String(action.input.app_name ?? ""),
+      matches
+    };
+  }
+  if (action.toolName === "resolve_app_action") {
+    const appName = String(action.input.app_name ?? action.input.name ?? "");
+    const resolved = await resolveAppAction(appName, normalizeAppAction(action.input.action), settings);
+    if (resolved.status !== "resolved" && resolved.status !== "check_installed") {
+      throw new Error(resolved.message);
+    }
+    return {
+      app_name: resolved.app_name,
+      action: resolved.action,
+      resolution: resolved
+    };
+  }
   if (action.toolName === "create_memory") {
     const content = String(action.input.content ?? "");
     if (looksSensitive(content)) {
@@ -81,6 +107,27 @@ async function normalizeInput(action: ToolActionInput, settings: AppSettings): P
       app_name: app.name,
       executable_path: app.executable_path,
       app_type: app.app_type
+    };
+  }
+  if (action.toolName === "set_registered_app_allowed") {
+    const registeredAppId = String(action.input.registered_app_id ?? "");
+    const app = await getRegisteredAppById(registeredAppId);
+    if (!app) throw new Error("Klak can only update registered apps.");
+    return {
+      registered_app_id: app.id,
+      app_name: app.name,
+      executable_path: app.executable_path,
+      allowed: Boolean(action.input.allowed ?? true)
+    };
+  }
+  if (action.toolName === "register_discovered_app" || action.toolName === "register_and_launch_app") {
+    const appName = String(action.input.app_name ?? action.input.name ?? "");
+    const candidate = (action.input.candidate as { name?: string; executable_path?: string; publisher?: string | null; source?: string } | undefined) ?? (await resolveSafeDiscoveredAppCandidate(appName, settings));
+    if (!candidate) throw new Error("Klak could not find a safe supported installation for that app.");
+    return {
+      app_name: candidate.name,
+      candidate,
+      combined: action.toolName === "register_and_launch_app"
     };
   }
   if (action.toolName === "run_command_template") {
@@ -125,5 +172,16 @@ async function normalizeInput(action: ToolActionInput, settings: AppSettings): P
       auto_stop_on_app_exit: template.auto_stop_on_app_exit
     };
   }
+  if (action.toolName === "scan_installed_apps") {
+    return action.input;
+  }
   return action.input;
+}
+
+function normalizeAppAction(action: unknown): "open" | "register" | "register_and_open" | "check_installed" {
+  const normalized = String(action ?? "open");
+  if (normalized === "register") return "register";
+  if (normalized === "register_and_open") return "register_and_open";
+  if (normalized === "check_installed") return "check_installed";
+  return "open";
 }

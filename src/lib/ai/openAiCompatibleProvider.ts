@@ -37,7 +37,7 @@ export class OpenAICompatibleProvider implements AIProvider {
           {
             role: "system",
             content:
-              "You are Klak, a local-first Windows AI operator. Do not request or expose secrets. When a user asks for a concrete supported action, call exactly one matching tool with IDs from the provided context. The app will preview and require approval before execution. If no safe exact action is available, answer normally and explain what setup is needed."
+              "You are Klak, a local-first Windows AI operator. Do not request or expose secrets. When a user asks for a concrete supported action, call exactly one matching tool with IDs from the provided context. For open, launch, register, or verify app requests, use resolve_app_action instead of folder or project tools. The app will preview and require approval before execution. If no safe exact action is available, answer normally and explain what setup is needed."
           },
           {
             role: "user",
@@ -126,6 +126,7 @@ function actionMessage(toolName: string): string {
   const labels: Record<string, string> = {
     open_url: "I can open that URL after you approve the preview.",
     open_folder: "I can open that folder after you approve the preview.",
+    resolve_app_action: "I can resolve that app request and ask for approval before it opens, registers, or verifies.",
     create_memory: "I can save that as memory after you approve the preview.",
     search_memory: "I can search memory and log the query.",
     create_note: "I can create that note after you approve the preview.",
@@ -162,6 +163,17 @@ function buildOpenAiTools(input: AIRequest) {
         parameters: objectSchema({
           path: { type: "string", description: "The exact folder path from allowed local context or project context." }
         }, ["path"])
+      }
+    },
+    enabled.has("resolve_app_action") && {
+      type: "function",
+      function: {
+        name: "resolve_app_action",
+        description: "Resolve a requested app name into a deterministic open, register, or verify action.",
+        parameters: objectSchema({
+          app_name: { type: "string", description: "The app name the user asked to open, register, or verify." },
+          action: { type: "string", enum: ["open", "register", "register_and_open", "check_installed"] }
+        }, ["app_name", "action"])
       }
     },
     enabled.has("create_memory") && {

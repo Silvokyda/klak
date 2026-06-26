@@ -5,6 +5,7 @@ import type { ActionPreview, AppSettings } from "../types";
 import { RealtimeVoiceOperatorBridge, type RealtimeVoiceOperatorUpdate } from "../lib/voice/RealtimeVoiceOperatorBridge";
 import { RealtimeVoiceSession, type RealtimeVoiceSnapshot } from "../lib/voice/realtimeVoiceSession";
 import { syncWakeListener } from "../lib/voice/wakeListener";
+import { speakText } from "../lib/voice/transcription";
 
 type VoicePhase =
   | "idle"
@@ -81,6 +82,7 @@ export function GlobalVoiceControllerProvider({
   const settingsRef = useRef(settings);
   const snapshotRef = useRef<RealtimeVoiceSnapshot | null>(null);
   const rebuildTokenRef = useRef(0);
+  const spokenPreviewIdRef = useRef<string | null>(null);
 
   useEffect(() => {
     settingsRef.current = settings;
@@ -181,6 +183,21 @@ export function GlobalVoiceControllerProvider({
     },
     [appendDiagnostic]
   );
+
+  useEffect(() => {
+    if (!pendingPreview) {
+      spokenPreviewIdRef.current = null;
+      return;
+    }
+    if (spokenPreviewIdRef.current === pendingPreview.id) return;
+    spokenPreviewIdRef.current = pendingPreview.id;
+    const prompt = `${pendingPreview.message} Say yes to approve or no to cancel.`;
+    const warning = speakText(prompt, settingsRef.current);
+    if (warning) {
+      appendDiagnostic("approval_prompt_voice_fallback", warning);
+    }
+    report("approval_prompt_spoken", prompt);
+  }, [appendDiagnostic, pendingPreview, report]);
 
   const closeSession = useCallback(
     async (reason: string) => {

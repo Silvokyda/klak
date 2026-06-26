@@ -21,6 +21,13 @@ export function GlobalVoiceOverlay() {
         {voice.detail || "Waiting for a wake phrase."}
       </p>
 
+      {voice.pendingPreview && (
+        <div className="global-voice-overlay__diagnostic">
+          <Sparkles size={14} />
+          <span>Approval required. Say yes to approve or no to cancel.</span>
+        </div>
+      )}
+
       {voice.snapshot && (
         <div className="global-voice-overlay__transcripts">
           <div>

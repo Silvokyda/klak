@@ -35,6 +35,22 @@ export const initialTools: ToolDefinition[] = [
     future: false
   },
   {
+    name: "scan_installed_apps",
+    label: "Scan Installed Apps",
+    description: "Scan bounded Windows sources for safe app discovery.",
+    riskLevel: "low",
+    enabled: true,
+    future: false
+  },
+  {
+    name: "resolve_app_action",
+    label: "Resolve App Action",
+    description: "Resolve an app name into a deterministic open, register, or verify action.",
+    riskLevel: "medium",
+    enabled: true,
+    future: false
+  },
+  {
     name: "create_note",
     label: "Create Note",
     description: "Create a local Markdown note in an allowed folder.",
@@ -54,6 +70,30 @@ export const initialTools: ToolDefinition[] = [
     name: "launch_app",
     label: "Launch App",
     description: "Launch an app that the user registered and allowed.",
+    riskLevel: "medium",
+    enabled: true,
+    future: false
+  },
+  {
+    name: "set_registered_app_allowed",
+    label: "Enable or Disable App",
+    description: "Enable or disable a registered app through the shared app repository.",
+    riskLevel: "medium",
+    enabled: true,
+    future: false
+  },
+  {
+    name: "register_discovered_app",
+    label: "Register Discovered App",
+    description: "Register a safe discovered app after validation and approval.",
+    riskLevel: "medium",
+    enabled: true,
+    future: false
+  },
+  {
+    name: "register_and_launch_app",
+    label: "Register and Launch App",
+    description: "Register a safe discovered app and launch it after approval.",
     riskLevel: "medium",
     enabled: true,
     future: false

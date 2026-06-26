@@ -69,6 +69,21 @@ function describeAction(toolName: string, input: Record<string, unknown>): strin
   if (toolName === "create_note") return `I plan to create "${String(input.title ?? input.fileName ?? "note")}" at ${String(input.path ?? "")}.`;
   if (toolName === "copy_to_clipboard") return `I plan to copy this text to your clipboard:\n${safeClipboardPreview(String(input.text ?? ""))}`;
   if (toolName === "launch_app") return `I plan to launch ${String(input.app_name ?? "the registered app")} from ${String(input.executable_path ?? "")}.`;
+  if (toolName === "scan_installed_apps") return "I plan to scan safe Windows app sources for discoverable apps.";
+  if (toolName === "resolve_app_action") {
+    const action = String(input.action ?? "open");
+    const appName = String(input.app_name ?? "the app");
+    if (action === "check_installed") return `I plan to verify whether ${appName} is installed.`;
+    if (action === "register") return `I plan to resolve and register ${appName} if it is safe.`;
+    if (action === "register_and_open") return `I plan to resolve, register, and open ${appName} if it is safe.`;
+    return `I plan to resolve and open ${appName} if it is safe.`;
+  }
+  if (toolName === "register_discovered_app")
+    return `I plan to register ${String(input.app_name ?? "the discovered app")} after safe discovery and approval.`;
+  if (toolName === "register_and_launch_app")
+    return `I plan to register and launch ${String(input.app_name ?? "the discovered app")} after safe discovery and approval.`;
+  if (toolName === "set_registered_app_allowed")
+    return `${String(input.app_name ?? "That app")} will be ${input.allowed === false ? "disabled" : "enabled"} after approval.`;
   if (toolName === "run_command_template") return `I plan to run the saved action "${String(input.command_name ?? "saved action")}" in ${String(input.working_directory ?? "")}.`;
   if (toolName === "start_background_process") return `I plan to start the running activity "${String(input.command_name ?? "saved action")}" in ${String(input.working_directory ?? "")}.`;
   return `I plan to use ${toolName}.`;

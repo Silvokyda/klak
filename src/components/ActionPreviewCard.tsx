@@ -1,8 +1,7 @@
 import { Check, X } from "lucide-react";
 import { useState } from "react";
 import type { ActionPreview, AppSettings } from "../types";
-import { approveAction, denyAction } from "../lib/permissions/policy";
-import { executeApprovedTool } from "../lib/tools/toolExecutor";
+import { approveKlakAction, denyKlakAction, executeKlakAction } from "../lib/actions/klakActionDispatcher";
 
 interface Props {
   preview: ActionPreview;
@@ -24,8 +23,8 @@ export function ActionPreviewCard({ preview, settings, onApprove, onDeny, onDone
         await onApprove();
       } else {
         if (!settings) throw new Error("Settings are required to execute this preview.");
-        await approveAction(preview.id);
-        await executeApprovedTool(preview, settings);
+        await approveKlakAction(preview);
+        await executeKlakAction(preview, settings);
       }
       onDone();
     } catch (caught) {
@@ -38,7 +37,7 @@ export function ActionPreviewCard({ preview, settings, onApprove, onDeny, onDone
     if (onDeny) {
       await onDeny();
     } else {
-      await denyAction(preview.id);
+      await denyKlakAction(preview);
     }
     onDone();
   }

@@ -19,8 +19,7 @@ import { sendChatMessage } from "../../lib/ai/chatOrchestrator";
 import { id, nowIso } from "../../lib/utils";
 import { buildActionPreviewForSuggestion } from "../../lib/tools/toolProposals";
 import { speakText } from "../../lib/voice/transcription";
-import { approveAction, denyAction } from "../../lib/permissions/policy";
-import { executeApprovedTool } from "../../lib/tools/toolExecutor";
+import { approveKlakAction, denyKlakAction, executeKlakAction } from "../../lib/actions/klakActionDispatcher";
 import { createPlannedOperatorTask, runOperatorTask } from "../../lib/operator/operatorRuntime";
 import { useGlobalVoiceController } from "../../app/GlobalVoiceController";
 
@@ -130,9 +129,13 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
         const nextPreview = await buildActionPreviewForSuggestion(response.suggestedAction, settings);
         if (nextPreview) {
           setPreview(nextPreview);
-          const spoken = speakText(`${nextPreview.message} Can I do this? Say yes or no.`, settings);
+          const spokenText =
+            nextPreview.tool.name === "resolve_app_action"
+              ? nextPreview.message
+              : `${nextPreview.message} Can I do this? Say yes or no.`;
+          const spoken = speakText(spokenText, settings);
           if (spoken) setVoiceMessage(spoken);
-          void updateCaption(`${nextPreview.message} Say yes or no.`);
+          void updateCaption(nextPreview.tool.name === "resolve_app_action" ? nextPreview.message : `${nextPreview.message} Say yes or no.`);
         }
       } else {
         const spoken = speakText(response.message, settings);
@@ -197,8 +200,8 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
     ]);
 
     try {
-      await approveAction(nextPreview.id);
-      await executeApprovedTool(nextPreview, settings);
+      await approveKlakAction(nextPreview);
+      await executeKlakAction(nextPreview, settings);
       setPreview(null);
       const done = "Done.";
       setMessages((items) => [
@@ -223,7 +226,7 @@ export function AssistantScreen({ settings }: { settings: AppSettings }) {
   }
 
   async function denyPreview(nextPreview: ActionPreview) {
-    await denyAction(nextPreview.id);
+    await denyKlakAction(nextPreview);
     setPreview(null);
     const denied = "Okay, I won't do that.";
     setMessages((items) => [

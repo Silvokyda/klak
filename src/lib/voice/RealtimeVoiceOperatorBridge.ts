@@ -1,20 +1,13 @@
-import type { ActionPreview, AppSettings, RegisteredAppRecord } from "../../types";
-import { listRegisteredApps } from "../apps/registeredAppsRepository";
-import { createActionLog } from "../logs/actionLogRepository";
+import type { ActionPreview, AppSettings } from "../../types";
 import { approveAction, denyAction } from "../permissions/policy";
 import { searchProjects, touchProject } from "../projects/projectRepository";
 import { listAllowedFolders } from "../storage/allowedFoldersRepository";
-import { executeApprovedTool } from "../tools/toolExecutor";
-import { buildActionPreviewForSuggestion } from "../tools/toolProposals";
+import { executeKlakAction, buildKlakActionPreview } from "../actions/klakActionDispatcher";
+import { resolveAppAction } from "../apps/appActionResolver";
+import { matchVoiceApprovalTranscript } from "./voiceApprovalMatcher";
 import { validateHttpUrl } from "../tools/safeToolUtils";
 
-export type RealtimeVoiceOperatorStatus =
-  | "pending"
-  | "approved"
-  | "denied"
-  | "completed"
-  | "failed"
-  | "blocked";
+export type RealtimeVoiceOperatorStatus = "denied" | "completed" | "failed" | "blocked";
 
 export interface RealtimeVoiceFunctionCall {
   sessionGeneration: number;
@@ -36,15 +29,27 @@ export interface RealtimeVoiceOperatorUpdate {
   preview?: ActionPreview | null;
 }
 
+export interface RealtimeVoiceFunctionCallResolution {
+  kind: "pending" | "completed" | "blocked" | "failed";
+  message: string;
+  preview?: ActionPreview | null;
+}
+
 interface PendingVoiceAction {
   preview: ActionPreview;
   call: RealtimeVoiceFunctionCall;
+  createdAt: string;
+  expiresAt: number;
+  resolved: boolean;
+  expireTimer: number | null;
 }
 
 interface BridgeCallbacks {
   onPreviewChanged: (preview: ActionPreview | null) => void;
   onDiagnostic?: (code: string, message: string) => void;
 }
+
+const defaultApprovalTimeoutMs = 2 * 60 * 1000;
 
 export class RealtimeVoiceOperatorBridge {
   private pendingAction: PendingVoiceAction | null = null;
@@ -56,85 +61,95 @@ export class RealtimeVoiceOperatorBridge {
 
   getRealtimeTools() {
     return [
-      {
-        type: "function",
-        name: "launch_registered_app",
-        description: "Create an approval preview to launch a registered and enabled desktop application by name.",
-        parameters: objectSchema(
+      functionTool(
+        "resolve_app_action",
+        "Resolve App Action",
+        "Resolve a requested app name into open, register, or verify behavior.",
+        objectSchema(
           {
-            app_name: {
+            app_name: stringProperty("The app name to resolve, for example Google Chrome."),
+            action: {
               type: "string",
-              description: "The registered application name, for example Google Chrome."
+              enum: ["open", "register", "register_and_open", "check_installed"]
             }
           },
-          ["app_name"]
+          ["app_name", "action"]
         )
-      },
-      {
-        type: "function",
-        name: "open_allowed_folder",
-        description: "Create an approval preview to open an existing allowed folder by label, project name, or exact path.",
-        parameters: objectSchema(
+      ),
+      functionTool(
+        "scan_installed_apps",
+        "Scan Installed Apps",
+        "Scan safe Windows app sources for discoverable apps.",
+        {
+          type: "object",
+          properties: {},
+          additionalProperties: false
+        }
+      ),
+      functionTool(
+        "open_allowed_folder",
+        "Open Allowed Folder",
+        "Create an approval preview to open an existing allowed folder by label, project name, or exact path.",
+        objectSchema(
           {
-            folder_name_or_path: {
-              type: "string",
-              description: "An allowed folder label, a known project name, or an exact allowed folder path."
-            }
+            folder_name_or_path: stringProperty("An allowed folder label, a known project name, or an exact allowed folder path.")
           },
           ["folder_name_or_path"]
         )
-      },
-      {
-        type: "function",
-        name: "open_url",
-        description: "Create an approval preview to open a valid http or https URL.",
-        parameters: objectSchema(
-          {
-            url: {
-              type: "string",
-              description: "The full http or https URL to open."
-            }
-          },
-          ["url"]
-        )
-      }
+      ),
+      functionTool(
+        "open_url",
+        "Open URL",
+        "Create an approval preview to open a valid http or https URL.",
+        objectSchema({ url: stringProperty("The full http or https URL to open.") }, ["url"])
+      )
     ];
   }
 
   buildSessionInstructions(): string {
     return [
       "You are Klak, a concise local-first desktop assistant.",
-      "Your only connected action tools in this realtime session are launch_registered_app, open_allowed_folder, and open_url.",
+      "Your connected action tools include app resolution, app discovery, folder opening, and URL opening.",
       "Do not claim unsupported capabilities such as phone calls, mouse control, keyboard control, screenshots, messaging, deleting files, quitting apps, or unrestricted terminal access.",
       "Do not claim an action has succeeded when you only created an approval preview.",
-      "If a tool result says pending approval, tell the user it is waiting for approval in Klak.",
+      "If an action requires approval, say it is waiting for approval in Klak and do not claim success yet.",
+      "If approval is pending and the user's reply is unclear, ask for a clear yes or no.",
       "If a tool result says completed, briefly confirm success.",
       "If a tool result says blocked, denied, failed, or unsupported, explain that honestly.",
       "If the user asks for a capability that is not connected, say that capability is not connected yet."
     ].join(" ");
   }
 
-  async handleFunctionCall(call: RealtimeVoiceFunctionCall): Promise<RealtimeVoiceOperatorUpdate> {
+  async handleFunctionCall(call: RealtimeVoiceFunctionCall): Promise<RealtimeVoiceFunctionCallResolution> {
     this.callbacks.onDiagnostic?.(
       "function_call_received",
       `call_id=${call.callId} response_id=${call.responseId} item_id=${call.outputItemId} name=${call.name}`
     );
 
     if (this.pendingAction) {
-      return this.blockedUpdate(call, "Another action preview is already pending approval.");
+      return { kind: "blocked", message: "Another action preview is already pending approval." };
     }
 
     try {
       const action = await this.resolveFunctionCall(call);
-      const preview = await buildActionPreviewForSuggestion(action, this.settings);
+      const preview = await buildKlakActionPreview(action, this.settings);
       if (!preview) {
-        return this.blockedUpdate(call, "That capability is not connected yet.");
+        return { kind: "blocked", message: "That capability is not connected yet." };
       }
       if (!preview.canRun) {
-        return this.blockedUpdate(call, blockedReason(preview));
+        return { kind: "blocked", message: blockedReason(preview) };
       }
 
-      this.pendingAction = { preview, call };
+      if (!preview.requiresConfirmation) {
+        const resultSummary = await executeKlakAction(preview, this.settings);
+        this.callbacks.onDiagnostic?.(
+          "result_returned_to_realtime",
+          `call_id=${call.callId} response_id=${call.responseId} item_id=${call.outputItemId} status=completed`
+        );
+        return { kind: "completed", message: resultSummary, preview: null };
+      }
+
+      this.pendingAction = this.createPendingAction(call, preview);
       this.callbacks.onPreviewChanged(preview);
       this.callbacks.onDiagnostic?.(
         "action_proposal_created",
@@ -146,67 +161,45 @@ export class RealtimeVoiceOperatorBridge {
       );
 
       return {
-        sessionGeneration: call.sessionGeneration,
-        responseId: call.responseId,
-        outputItemId: call.outputItemId,
-        callId: call.callId,
-        functionName: call.name,
-        status: "pending",
+        kind: "pending",
         message: pendingMessage(preview),
         preview
       };
     } catch (error) {
-      return this.failedUpdate(call, error instanceof Error ? error.message : String(error));
+      return { kind: "failed", message: error instanceof Error ? error.message : String(error) };
     }
   }
 
+  getPendingAction(): ActionPreview | null {
+    return this.pendingAction?.preview ?? null;
+  }
+
+  getPendingCallId(): string | null {
+    return this.pendingAction?.call.callId ?? null;
+  }
+
   async approvePendingAction(): Promise<RealtimeVoiceOperatorUpdate | null> {
-    if (!this.pendingAction) return null;
-    const pending = this.pendingAction;
-    this.callbacks.onDiagnostic?.(
-      "action_approved",
-      `call_id=${pending.call.callId} response_id=${pending.call.responseId} item_id=${pending.call.outputItemId} preview_id=${pending.preview.id}`
-    );
+    const pending = this.ensurePendingAction();
+    if (!pending) return null;
+    pending.resolved = true;
 
     await approveAction(pending.preview.id);
-    const approvedUpdate: RealtimeVoiceOperatorUpdate = {
-      sessionGeneration: pending.call.sessionGeneration,
-      responseId: pending.call.responseId,
-      outputItemId: pending.call.outputItemId,
-      callId: pending.call.callId,
-      functionName: pending.call.name,
-      status: "approved",
-      message: `${pending.preview.tool.label} was approved. Klak is running it now.`,
-      preview: pending.preview
-    };
-
     try {
-      const resultSummary = await executeApprovedTool(pending.preview, this.settings);
-      if (pending.preview.tool.name === "open_folder") {
-        const project = await resolveProjectForPath(String(pending.preview.input.path ?? ""));
-        if (project) {
-          await touchProject(project.id);
-        }
-      }
-      this.callbacks.onDiagnostic?.(
-        "execution_completed",
-        `call_id=${pending.call.callId} response_id=${pending.call.responseId} item_id=${pending.call.outputItemId} preview_id=${pending.preview.id}`
-      );
-      this.clearPendingPreview();
-      return {
-        ...approvedUpdate,
-        status: "completed",
-        message: resultSummary,
-        preview: null
-      };
+      const resultSummary = await executeKlakAction(pending.preview, this.settings);
+      await this.noteProjectTouchForPreview(pending.preview);
+      return this.finishPendingAction("completed", resultSummary);
     } catch (error) {
       this.callbacks.onDiagnostic?.(
         "execution_failed",
         `call_id=${pending.call.callId} response_id=${pending.call.responseId} item_id=${pending.call.outputItemId} preview_id=${pending.preview.id}`
       );
-      this.clearPendingPreview();
+      this.clearPendingAction();
       return {
-        ...approvedUpdate,
+        sessionGeneration: pending.call.sessionGeneration,
+        responseId: pending.call.responseId,
+        outputItemId: pending.call.outputItemId,
+        callId: pending.call.callId,
+        functionName: pending.call.name,
         status: "failed",
         message: error instanceof Error ? error.message : String(error),
         preview: null
@@ -215,48 +208,146 @@ export class RealtimeVoiceOperatorBridge {
   }
 
   async denyPendingAction(): Promise<RealtimeVoiceOperatorUpdate | null> {
-    if (!this.pendingAction) return null;
-    const pending = this.pendingAction;
+    const pending = this.ensurePendingAction();
+    if (!pending) return null;
+    pending.resolved = true;
+
     await denyAction(pending.preview.id);
+    return this.finishPendingAction("denied", "The user denied the request.");
+  }
+
+  async resolveVoiceApproval(transcript: string): Promise<RealtimeVoiceOperatorUpdate | null> {
+    const pending = this.ensurePendingAction();
+    if (!pending) return null;
+
+    const match = matchVoiceApprovalTranscript(transcript);
+    if (match === "approve") return this.approvePendingAction();
+    if (match === "deny") return this.denyPendingAction();
+    return null;
+  }
+
+  clearPendingAction(): void {
+    this.cancelPendingTimer();
+    this.pendingAction = null;
+    this.callbacks.onPreviewChanged(null);
+  }
+
+  private createPendingAction(call: RealtimeVoiceFunctionCall, preview: ActionPreview): PendingVoiceAction {
+    const createdAt = Date.now();
+    const pending: PendingVoiceAction = {
+      call,
+      preview,
+      createdAt: new Date(createdAt).toISOString(),
+      expiresAt: createdAt + defaultApprovalTimeoutMs,
+      resolved: false,
+      expireTimer: null
+    };
+    pending.expireTimer = window.setTimeout(() => {
+      if (!this.pendingAction || this.pendingAction.call.callId !== call.callId || this.pendingAction.resolved) return;
+      this.callbacks.onDiagnostic?.(
+        "approval_expired",
+        `call_id=${call.callId} response_id=${call.responseId} item_id=${call.outputItemId} preview_id=${preview.id}`
+      );
+      void denyAction(preview.id).catch(() => undefined);
+      this.clearPendingAction();
+    }, defaultApprovalTimeoutMs);
+    return pending;
+  }
+
+  private ensurePendingAction(): PendingVoiceAction | null {
+    if (!this.pendingAction) return null;
+    if (this.pendingAction.resolved) return null;
+    if (Date.now() >= this.pendingAction.expiresAt) {
+      this.callbacks.onDiagnostic?.(
+        "approval_expired",
+        `call_id=${this.pendingAction.call.callId} response_id=${this.pendingAction.call.responseId} item_id=${this.pendingAction.call.outputItemId} preview_id=${this.pendingAction.preview.id}`
+      );
+      void denyAction(this.pendingAction.preview.id).catch(() => undefined);
+      this.clearPendingAction();
+      return null;
+    }
+    return this.pendingAction;
+  }
+
+  private async finishPendingAction(status: RealtimeVoiceOperatorStatus, messageOverride?: string): Promise<RealtimeVoiceOperatorUpdate> {
+    const pending = this.pendingAction;
+    if (!pending) {
+      throw new Error("No pending voice action is available.");
+    }
+    pending.resolved = true;
+    this.cancelPendingTimer();
+
+    const message =
+      messageOverride ??
+      (status === "completed"
+        ? `${pending.preview.tool.label} completed successfully.`
+        : status === "denied"
+          ? `${pending.preview.tool.label} was denied, so Klak did not run it.`
+          : `${pending.preview.tool.label} ${status}.`);
+
+    if (status === "completed") {
+      this.callbacks.onDiagnostic?.(
+        "execution_completed",
+        `call_id=${pending.call.callId} response_id=${pending.call.responseId} item_id=${pending.call.outputItemId} preview_id=${pending.preview.id}`
+      );
+      this.clearPendingAction();
+      return {
+        sessionGeneration: pending.call.sessionGeneration,
+        responseId: pending.call.responseId,
+        outputItemId: pending.call.outputItemId,
+        callId: pending.call.callId,
+        functionName: pending.call.name,
+        status: "completed",
+        message: messageOverride || message,
+        preview: null
+      };
+    }
+
     this.callbacks.onDiagnostic?.(
-      "action_denied",
+      status === "denied" ? "action_denied" : "action_finished",
       `call_id=${pending.call.callId} response_id=${pending.call.responseId} item_id=${pending.call.outputItemId} preview_id=${pending.preview.id}`
     );
-    this.clearPendingPreview();
+    this.clearPendingAction();
     return {
       sessionGeneration: pending.call.sessionGeneration,
       responseId: pending.call.responseId,
       outputItemId: pending.call.outputItemId,
       callId: pending.call.callId,
       functionName: pending.call.name,
-      status: "denied",
-      message: `${pending.preview.tool.label} was denied, so Klak did not run it.`,
+      status,
+      message,
       preview: null
     };
   }
 
-  clearPendingAction(): void {
-    this.clearPendingPreview();
-  }
-
-  private clearPendingPreview(): void {
-    this.pendingAction = null;
-    this.callbacks.onPreviewChanged(null);
+  private async noteProjectTouchForPreview(preview: ActionPreview): Promise<void> {
+    if (preview.tool.name === "open_folder") {
+      const path = String(preview.input.path ?? "");
+      const project = await resolveProjectForPath(path);
+      if (project) await touchProject(project.id);
+    }
   }
 
   private async resolveFunctionCall(call: RealtimeVoiceFunctionCall) {
     const parsed = parseArguments(call);
-    if (call.name === "launch_registered_app") {
-      const app = await resolveRegisteredApp(String(parsed.app_name ?? ""));
-      if (!app) {
-        throw new Error("The application is not registered, so the request was blocked.");
-      }
-      if (!app.allowed) {
-        throw new Error("The application is registered but disabled, so the request was blocked.");
-      }
+
+    if (call.name === "resolve_app_action") {
+      const action = normalizeAppAction(String(parsed.action ?? "open"));
+      const resolution = await resolveAppAction(String(parsed.app_name ?? ""), action, this.settings);
       return {
-        toolName: "launch_app",
-        input: { registered_app_id: app.id }
+        toolName: "resolve_app_action",
+        input: {
+          app_name: resolution.app_name,
+          action: resolution.action,
+          resolution
+        }
+      };
+    }
+
+    if (call.name === "scan_installed_apps") {
+      return {
+        toolName: "scan_installed_apps",
+        input: { registered_executable_paths: [] }
       };
     }
 
@@ -274,52 +365,31 @@ export class RealtimeVoiceOperatorBridge {
     if (call.name === "open_url") {
       return {
         toolName: "open_url",
-        input: { url: validateHttpUrl(parsed.url) }
+        input: { url: validateHttpUrl(String(parsed.url ?? "")) }
       };
     }
 
     throw new Error("That capability is not connected yet.");
   }
 
-  private blockedUpdate(call: RealtimeVoiceFunctionCall, message: string): RealtimeVoiceOperatorUpdate {
-    this.callbacks.onDiagnostic?.(
-      "result_returned_to_realtime",
-      `call_id=${call.callId} response_id=${call.responseId} item_id=${call.outputItemId} status=blocked`
-    );
-    void createActionLog({
-      tool_name: `realtime_${call.name}`,
-      input_summary: `call_id=${call.callId}`,
-      risk_level: "medium",
-      status: "blocked",
-      user_approved: null,
-      error_message: message
-    }).catch(() => undefined);
-    return {
-      sessionGeneration: call.sessionGeneration,
-      responseId: call.responseId,
-      outputItemId: call.outputItemId,
-      callId: call.callId,
-      functionName: call.name,
-      status: "blocked",
-      message
-    };
+  private cancelPendingTimer(): void {
+    if (!this.pendingAction?.expireTimer) return;
+    window.clearTimeout(this.pendingAction.expireTimer);
+    this.pendingAction.expireTimer = null;
   }
+}
 
-  private failedUpdate(call: RealtimeVoiceFunctionCall, message: string): RealtimeVoiceOperatorUpdate {
-    this.callbacks.onDiagnostic?.(
-      "result_returned_to_realtime",
-      `call_id=${call.callId} response_id=${call.responseId} item_id=${call.outputItemId} status=failed`
-    );
-    return {
-      sessionGeneration: call.sessionGeneration,
-      responseId: call.responseId,
-      outputItemId: call.outputItemId,
-      callId: call.callId,
-      functionName: call.name,
-      status: "failed",
-      message
-    };
-  }
+function functionTool(name: string, label: string, description: string, parameters: Record<string, unknown>) {
+  return {
+    type: "function",
+    name,
+    description,
+    parameters
+  };
+}
+
+function stringProperty(description: string) {
+  return { type: "string", description };
 }
 
 function objectSchema(properties: Record<string, unknown>, required: string[]) {
@@ -343,16 +413,11 @@ function normalizeLookup(value: string): string {
   return value.trim().replace(/\s+/g, " ").toLowerCase();
 }
 
-async function resolveRegisteredApp(appName: string): Promise<RegisteredAppRecord | null> {
-  const lookup = normalizeLookup(appName);
-  if (!lookup) return null;
-  const apps = await listRegisteredApps({ allowed: true });
-  const exact = apps.find((app) => normalizeLookup(app.name) === lookup);
-  if (exact) return exact;
-
-  const contains = apps.filter((app) => normalizeLookup(app.name).includes(lookup));
-  if (contains.length === 1) return contains[0];
-  return null;
+function normalizeAppAction(action: string): "open" | "register" | "register_and_open" | "check_installed" {
+  if (action === "register") return "register";
+  if (action === "register_and_open") return "register_and_open";
+  if (action === "check_installed") return "check_installed";
+  return "open";
 }
 
 async function resolveAllowedFolder(folderNameOrPath: string): Promise<string | null> {
@@ -390,16 +455,25 @@ async function resolveProjectForPath(path: string) {
 }
 
 function pendingMessage(preview: ActionPreview): string {
-  if (preview.tool.name === "launch_app") {
-    return `I found ${String(preview.input.app_name ?? "that registered app")}. Please approve the launch in Klak.`;
+  if (preview.tool.name === "resolve_app_action") {
+    return String(preview.message ?? "I resolved the app action.");
+  }
+  if (preview.tool.name === "launch_app" || preview.tool.name === "register_and_launch_app") {
+    return `I found ${String(preview.input.app_name ?? "that app")}. It needs your approval to register or open it. Say yes to approve or no to cancel.`;
+  }
+  if (preview.tool.name === "register_discovered_app") {
+    return `I found ${String(preview.input.app_name ?? "that app")}. Please approve the registration in Klak. Say yes to approve or no to cancel.`;
+  }
+  if (preview.tool.name === "set_registered_app_allowed") {
+    return `${String(preview.input.app_name ?? "That app")} needs your approval before Klak changes its allowed state. Say yes to approve or no to cancel.`;
   }
   if (preview.tool.name === "open_folder") {
-    return "I found that allowed folder. Please approve opening it in Klak.";
+    return "I found that allowed folder. Please approve opening it in Klak. Say yes to approve or no to cancel.";
   }
   if (preview.tool.name === "open_url") {
-    return `I can open ${String(preview.input.url ?? "that URL")}, but it is waiting for approval in Klak.`;
+    return `I can open ${String(preview.input.url ?? "that URL")}, but it is waiting for approval in Klak. Say yes to approve or no to cancel.`;
   }
-  return "The action preview is ready and waiting for approval in Klak.";
+  return `${preview.tool.label} is waiting for approval in Klak.`;
 }
 
 function blockedReason(preview: ActionPreview): string {

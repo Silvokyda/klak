@@ -7,6 +7,7 @@ import {
 } from "./RealtimeVoiceOperatorBridge";
 import { RealtimeTurnOwnership } from "./realtimeTurnOwnership";
 import { stopWakeListener, syncWakeListener } from "./wakeListener";
+import { isDeterministicSleepCommand } from "./voiceApprovalMatcher";
 
 export type RealtimeVoiceState =
   | "idle"
@@ -67,6 +68,7 @@ export class RealtimeVoiceSession {
   private peerConnected = false;
   private dataChannelOpen = false;
   private sessionCreated = false;
+  private suppressNextAssistantResponse = false;
   private snapshot: RealtimeVoiceSnapshot = { ...emptySnapshot };
 
   constructor(
@@ -304,19 +306,12 @@ export class RealtimeVoiceSession {
     this.sendEvent({
       type: "conversation.item.create",
       item: {
-        type: "message",
-        role: "system",
-        content: [
-          {
-            type: "input_text",
-            text: JSON.stringify({
-              kind: "voice_tool_status",
-              function_name: update.functionName,
-              status: update.status,
-              message: update.message
-            })
-          }
-        ]
+        type: "function_call_output",
+        call_id: update.callId,
+        output: JSON.stringify({
+          status: update.status,
+          message: update.message
+        })
       }
     });
 
@@ -324,7 +319,7 @@ export class RealtimeVoiceSession {
       type: "response.create",
       response: {
         instructions:
-          "Respond briefly to the latest tool status update. Confirm success only for completed. Explain denied, blocked, or failed results honestly.",
+          "Respond briefly to the latest tool result. Confirm success only for completed. Explain denied, blocked, or failed results honestly.",
         output_modalities: ["audio"]
       }
     });
@@ -404,10 +399,11 @@ export class RealtimeVoiceSession {
             stringField(event, "transcript") || this.turnOwnership.getCurrentUserPartialTranscript()
           );
           if (!transcript) break;
-          if (looksLikeSleepPhrase(transcript)) {
+          if (isDeterministicSleepCommand(transcript)) {
             void this.close("sleep_phrase");
             break;
           }
+          void this.handleApprovalTranscript(transcript);
           this.emitDiagnostic("user_transcript_finalized", `item_id=${itemId || "unknown"}`);
           this.transition(this.snapshot.state, {
             finalUserTranscript: transcript,
@@ -416,6 +412,13 @@ export class RealtimeVoiceSession {
         }
         break;
       case "response.created":
+        if (this.suppressNextAssistantResponse) {
+          this.suppressNextAssistantResponse = false;
+          if (resolvedResponseId) {
+            this.sendEvent({ type: "response.cancel", response: { id: resolvedResponseId } });
+          }
+          break;
+        }
         this.turnOwnership.beginResponse(resolvedResponseId);
         this.transition("processing");
         this.emitDiagnostic("response_created", `response_id=${resolvedResponseId || "unknown"}`);
@@ -518,31 +521,47 @@ export class RealtimeVoiceSession {
     name: string;
     argumentsJson: string;
   }): Promise<void> {
-    const update = await this.operatorBridge.handleFunctionCall(call);
-    this.sendEvent({
-      type: "conversation.item.create",
-      item: {
-        type: "function_call_output",
-        call_id: call.callId,
-        status: update.status === "pending" ? "in_progress" : update.status === "completed" ? "completed" : "incomplete",
-        output: JSON.stringify({
-          status: update.status,
-          message: update.message
-        })
-      }
-    });
-    this.sendEvent({
-      type: "response.create",
-      response: {
-        instructions:
-          "Summarize the latest tool result for the user. If the result is pending, tell the user it is waiting for approval in Klak. Never claim success before completed.",
-        output_modalities: ["audio"]
-      }
-    });
+    const resolution = await this.operatorBridge.handleFunctionCall(call);
+    if (resolution.kind === "pending") {
+      return;
+    }
+
     this.emitDiagnostic(
       "result_returned_to_realtime",
-      `call_id=${call.callId} response_id=${call.responseId} item_id=${call.outputItemId} status=${update.status}`
+      `call_id=${call.callId} response_id=${call.responseId} item_id=${call.outputItemId} status=${resolution.kind}`
     );
+
+    await this.publishOperatorUpdate({
+      sessionGeneration: call.sessionGeneration,
+      responseId: call.responseId,
+      outputItemId: call.outputItemId,
+      callId: call.callId,
+      functionName: call.name,
+      status: resolution.kind === "completed" ? "completed" : resolution.kind,
+      message: resolution.message,
+      preview: resolution.preview ?? null
+    });
+  }
+
+  private async handleApprovalTranscript(transcript: string): Promise<void> {
+    const pending = this.operatorBridge.getPendingAction();
+    if (!pending) return;
+
+    if (isDeterministicSleepCommand(transcript)) {
+      void this.close("sleep_phrase");
+      return;
+    }
+
+    const approval = await this.operatorBridge.resolveVoiceApproval(transcript);
+    if (!approval) {
+      this.emitDiagnostic("approval_ambiguous", "Approval response was unclear; Klak needs a clear yes or no.");
+      return;
+    }
+
+    this.suppressNextAssistantResponse = true;
+    window.setTimeout(() => {
+      void this.publishOperatorUpdate(approval);
+    }, 0);
   }
 
   private attachAssistantAudio(stream: MediaStream): void {

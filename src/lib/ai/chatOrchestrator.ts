@@ -5,6 +5,7 @@ import { listTools } from "../tools/toolRegistry";
 import { OpenAICompatibleProvider } from "./openAiCompatibleProvider";
 import { localContextCollector } from "../context/localContext";
 import { searchRegisteredApps } from "../apps/registeredAppsRepository";
+import { resolveAppAction } from "../apps/appActionResolver";
 import { isLongRunningCommand, searchCommandTemplates } from "../commands/commandTemplateRepository";
 import { listRunningBackgroundProcesses } from "../processes/backgroundProcessRepository";
 import { searchProjects } from "../projects/projectRepository";
@@ -31,7 +32,7 @@ export async function sendChatMessage(userMessage: string, settings: AppSettings
 
   if (/\bremember\b.+\bas an app\b/i.test(userMessage) || /\bregister\b.+\bapp\b/i.test(userMessage)) {
     return {
-      message: "Open Apps and click Scan for apps. I can help you choose from safe suggestions, but you decide what gets added and Klak will still ask before launching anything."
+      message: "I can help with that app request. Ask me to open the app name, and I will resolve the registered or safe installed match before asking for approval."
     };
   }
 
@@ -90,29 +91,11 @@ export async function sendChatMessage(userMessage: string, settings: AppSettings
 
   const launchRequest = userMessage.match(/\b(?:open|launch|start)\s+(.+?)\.?$/i);
   if (launchRequest) {
-    const requested = launchRequest[1].trim().toLowerCase();
-    const app = relevantRegisteredApps.find((item) => item.allowed && item.name.toLowerCase().includes(requested));
-    if (app) {
-      return {
-        message: `I found the registered app "${app.name}". Review the action preview before it launches.`,
-        suggestedAction: { toolName: "launch_app", input: { registered_app_id: app.id } }
-      };
-    }
-
-    const project = relevantProjects.find((item) => item.name.toLowerCase().includes(requested));
-    if (project?.startup_workflow_id && /\bstart\b/i.test(userMessage)) {
-      return {
-        message: `I found "${project.name}" and its linked startup routine. Open Projects to preview and run it with confirmation.`
-      };
-    }
-    if (project?.repo_path) {
-      return {
-        message: `I found "${project.name}". I can open its project folder after approval.`,
-        suggestedAction: { toolName: "open_folder", input: { path: project.repo_path } }
-      };
-    }
+    const requested = launchRequest[1].trim();
+    const resolution = await resolveAppAction(requested, "open", settings);
     return {
-      message: `I do not see "${launchRequest[1].trim()}" in your registered apps yet. Open Apps and click Scan for apps; if Klak finds it, you can choose whether to add it.`
+      message: resolution.message,
+      suggestedAction: { toolName: "resolve_app_action", input: { app_name: requested, action: "open" } }
     };
   }
 
